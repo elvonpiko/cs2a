@@ -50,6 +50,8 @@ check "mariadb provisioning"       grep -q 'CREATE DATABASE IF NOT EXISTS cs2_wp
 check "game port is asked"         grep -q 'Game port (A2S + RCON' scripts/bootstrap.sh
 check "detects existing install"   grep -q 'detect_existing' scripts/bootstrap.sh
 check "parses rcon from cfg"       grep -q 'rcon_password' scripts/bootstrap.sh
+check "strips ExecStart prefix"    grep -q 'dir#ExecStart=' scripts/bootstrap.sh
+check "handles vpk binary path"    grep -q 'bin/linuxsteamrt64' scripts/bootstrap.sh
 check "reuse mode default on detect" grep -q 'DETECTED_OK=1' scripts/bootstrap.sh
 check "install wrapper exists"     test -x scripts/install.sh
 check "wrapper re-attaches tty"    grep -q '/dev/tty' scripts/install.sh

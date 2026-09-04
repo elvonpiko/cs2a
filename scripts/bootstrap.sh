@@ -131,10 +131,17 @@ detect_existing() {
     grep -qi "usercon" "$f" 2>/dev/null || continue
     DETECTED_UNIT=$(basename "$f" .service)
     dir=$(grep -oE "ExecStart=[^ ]*cs2[^ ]*" "$f" 2>/dev/null | head -1)
-    # derive install root: prefer WorkingDirectory=.../game, else force_install_dir
+    dir="${dir#ExecStart=}"
+    # derive install root: prefer WorkingDirectory=.../game, else the binary path
+    # (handles .../game/cs2 and the steamcmd layout .../game/bin/linuxsteamrt64/cs2)
     local wd; wd=$(grep -oE "^WorkingDirectory=.*" "$f" | head -1 | cut -d= -f2)
-    if [[ $wd == */game ]]; then DETECTED_CS2_DIR="${wd%/game}"
-    else DETECTED_CS2_DIR=$(dirname "$(dirname "$dir")" 2>/dev/null); fi
+    if [[ $wd == */game ]]; then
+      DETECTED_CS2_DIR="${wd%/game}"
+    else
+      DETECTED_CS2_DIR="${dir%/*}"
+      DETECTED_CS2_DIR="${DETECTED_CS2_DIR%/bin/linuxsteamrt64}"
+      DETECTED_CS2_DIR="${DETECTED_CS2_DIR%/game}"
+    fi
     # port from the launch line
     DETECTED_PORT=$(grep -oE "\+?port [0-9]+" "$f" | head -1 | awk '{print $2}')
     break
