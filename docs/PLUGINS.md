@@ -69,6 +69,22 @@ line) and is toggled with the `mm_whitelist_enable` cvar. cs2a:
 - lets admins whitelist a panel user with one click (uses the SteamID linked
   on their account).
 
+## Player-facing cosmetics workflow (end to end)
+
+1. Installer: answer **yes** to the MariaDB question (or run it later and set
+   `wp_dsn` in `/opt/cs2a/etc/agent.json`).
+2. Panel → **Plugins**: install **Metamod:Source**, then **CounterStrikeSharp**,
+   then **cs2-WeaponPaints** (dependencies install automatically).
+3. Panel → **Plugins → cs2-WeaponPaints → Edit config**: put the MariaDB
+   credentials the installer printed into `DatabaseConfig`.
+4. Restart the server from the panel. WeaponPaints creates its tables on boot.
+5. Knives / gloves / agents: players pick them on the panel **Loadout** page
+   (cs2a writes `wp_player_knife`, `wp_player_gloves`, `wp_player_agents`).
+6. Gun skin paint kits: chosen **in game** with WeaponPaints' own `!wp` menu
+   (stored in `wp_player_skins`). The panel intentionally does not duplicate
+   the hundreds of paint-kit IDs.
+7. Loadouts apply on connect; `!wp` in game refreshes without reconnecting.
+
 ## References
 
 - Metamod:Source downloads: <https://mms.alliedmods.net/mmsdrop/2.0/>
