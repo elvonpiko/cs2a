@@ -138,7 +138,7 @@ func (s *Server) requireRole(next http.HandlerFunc, roles ...string) http.Handle
 			}
 		}
 		if !allowed {
-			http.Redirect(w, r, "/?denied=1", http.StatusSeeOther)
+			redirectFlash(w, r, "/", "err", "You do not have access to that page — admins only.")
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUser, u)))
