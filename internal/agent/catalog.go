@@ -69,7 +69,7 @@ func DefaultCatalog() []CatalogEntry {
 			Requires:    []string{"cssharp"},
 			Repo:        "Nereziel/cs2-WeaponPaints",
 			AssetRegex:  `(?i)weaponpaints.*\.zip`,
-			PostInstall: []string{"guidelines-off"},
+			PostInstall: []string{"guidelines-off", "wp-default-config"},
 			Homepage:    "https://github.com/Nereziel/cs2-WeaponPaints",
 			ConfigPath:  "plugins/WeaponPaints/WeaponPaints.json",
 		},

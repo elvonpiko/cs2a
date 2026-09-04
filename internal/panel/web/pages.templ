@@ -151,14 +151,14 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 	<div class="page-head">
 		<h1>Loadout</h1>
-		<p>Your cosmetics for this server — applied automatically when you connect.</p>
+		<p>Your cosmetics for this server — applied automatically when you connect. In game, <span class="mono">!wp</span> refreshes without reconnecting.</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {
 		if toast.Kind == "ok" {
-			<div class="notice">{ toast.Message }</div>
+			<div class="notice" id="flash">{ toast.Message }</div>
 		} else {
-			<div class="error-box">{ toast.Message }</div>
+			<div class="error-box" id="flash">{ toast.Message }</div>
 		}
 	}
 
@@ -177,51 +177,116 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 				<b>WeaponPaints</b> plugin (Plugins page) and configure its MySQL database.
 			</div>
 		}
-		<div class="grid cols-2">
-			<div class="card">
-				<h2>Terrorist knife</h2>
-				<p class="sub">steamid <span class="mono">{ v.SteamID }</span></p>
-				<form method="post" action="/loadout">
-					<label class="field">
-						<span>Knife</span>
-						<select name="knife_t">
-							for _, k := range v.KnifeNames {
-								<option value={ k.Value } selected?={ k.Value == v.KnifeT }>{ k.Label }</option>
-							}
-						</select>
-					</label>
-					<label class="field">
-						<span>CT knife</span>
-						<select name="knife_ct">
-							for _, k := range v.KnifeNames {
-								<option value={ k.Value } selected?={ k.Value == v.KnifeCT }>{ k.Label }</option>
-							}
-						</select>
-					</label>
-					<button class="btn primary" type="submit">Save loadout</button>
-					<p class="hint">In game, type <span class="mono">!wp</span> to force a refresh if you changed it while connected.</p>
-				</form>
-			</div>
-			<div class="card">
-				<h2>How it works</h2>
-				<p class="sub">cs2a writes your choice to the server's skin database</p>
-				<div class="kv"><span class="k">SteamID</span><span class="v mono">{ v.SteamID }</span></div>
-				<div class="kv"><span class="k">T knife</span><span class="v mono">{ knifeLabel(v.KnifeT, v.KnifeNames) }</span></div>
-				<div class="kv"><span class="k">CT knife</span><span class="v mono">{ knifeLabel(v.KnifeCT, v.KnifeNames) }</span></div>
-				<div class="kv"><span class="k">Sync</span>
-					<span class="v">
-						if v.SyncEnabled {
-							<span class="badge green">active</span>
-						} else {
-							<span class="badge grey">inactive</span>
+		<form method="post" action="/loadout" id="loadout-form">
+			<div class="loadout-grid">
+				<!-- T side -->
+				<div class="card">
+					<h2>Terrorist side</h2>
+					<p class="sub">steamid <span class="mono">{ v.SteamID }</span></p>
+
+					<h3 class="lo-cat">Knife</h3>
+					<div class="lo-row" data-kind="knife_t" data-current={ v.KnifeT }>
+						for _, k := range v.KnifeNames {
+							<label class={ "item-card", templ.KV("selected", k.Value == v.KnifeT) }>
+								<input type="radio" name="knife_t" value={ k.Value } checked?={ k.Value == v.KnifeT }/>
+								if k.Value == "default" {
+									<span class="item-img placeholder">—</span>
+								} else {
+									<img class="item-img" src={ "/static/img/knives/" + k.Value + ".png" } alt={ k.Label } loading="lazy"/>
+								}
+								<span class="item-name">{ k.Label }</span>
+							</label>
 						}
-					</span>
+					</div>
+
+					<h3 class="lo-cat">Gloves</h3>
+					<div class="lo-row" data-kind="gloves_t" data-current={ v.GlovesT }>
+						for _, g := range v.Gloves {
+							<label class={ "item-card", templ.KV("selected", g.Value == v.GlovesT) }>
+								<input type="radio" name="gloves_t" value={ g.Value } checked?={ g.Value == v.GlovesT }/>
+								if g.Image != "" {
+									<img class="item-img" src={ g.Image } alt={ g.Label } loading="lazy"/>
+								} else {
+									<span class="item-img placeholder">—</span>
+								}
+								<span class="item-name">{ g.Label }</span>
+							</label>
+						}
+					</div>
+
+					<h3 class="lo-cat">Agent</h3>
+					<div class="lo-row" data-kind="agent_t" data-current={ v.AgentT }>
+						for _, a := range v.AgentsT {
+							<label class={ "item-card", templ.KV("selected", a.Value == v.AgentT) }>
+								<input type="radio" name="agent_t" value={ a.Value } checked?={ a.Value == v.AgentT }/>
+								if a.Image != "" {
+									<img class="item-img" src={ a.Image } alt={ a.Label } loading="lazy"/>
+								} else {
+									<span class="item-img placeholder">—</span>
+								}
+								<span class="item-name">{ a.Label }</span>
+							</label>
+						}
+					</div>
 				</div>
-				<p class="muted mt14">
-					Your selection is stored per SteamID64 and applied server-side when the map loads you in.
-					Cosmetics are server-side only — other players see them, your inventory does not change.
-				</p>
+
+				<!-- CT side -->
+				<div class="card">
+					<h2>CT side</h2>
+					<p class="sub">Pick different cosmetics for the counter-terrorist side</p>
+
+					<h3 class="lo-cat">Knife</h3>
+					<div class="lo-row" data-kind="knife_ct" data-current={ v.KnifeCT }>
+						for _, k := range v.KnifeNames {
+							<label class={ "item-card", templ.KV("selected", k.Value == v.KnifeCT) }>
+								<input type="radio" name="knife_ct" value={ k.Value } checked?={ k.Value == v.KnifeCT }/>
+								if k.Value == "default" {
+									<span class="item-img placeholder">—</span>
+								} else {
+									<img class="item-img" src={ "/static/img/knives/" + k.Value + ".png" } alt={ k.Label } loading="lazy"/>
+								}
+								<span class="item-name">{ k.Label }</span>
+							</label>
+						}
+					</div>
+
+					<h3 class="lo-cat">Gloves</h3>
+					<div class="lo-row" data-kind="gloves_ct" data-current={ v.GlovesCT }>
+						for _, g := range v.Gloves {
+							<label class={ "item-card", templ.KV("selected", g.Value == v.GlovesCT) }>
+								<input type="radio" name="gloves_ct" value={ g.Value } checked?={ g.Value == v.GlovesCT }/>
+								if g.Image != "" {
+									<img class="item-img" src={ g.Image } alt={ g.Label } loading="lazy"/>
+								} else {
+									<span class="item-img placeholder">—</span>
+								}
+								<span class="item-name">{ g.Label }</span>
+							</label>
+						}
+					</div>
+
+					<h3 class="lo-cat">Agent</h3>
+					<div class="lo-row" data-kind="agent_ct" data-current={ v.AgentCT }>
+						for _, a := range v.AgentsCT {
+							<label class={ "item-card", templ.KV("selected", a.Value == v.AgentCT) }>
+								<input type="radio" name="agent_ct" value={ a.Value } checked?={ a.Value == v.AgentCT }/>
+								if a.Image != "" {
+									<img class="item-img" src={ a.Image } alt={ a.Label } loading="lazy"/>
+								} else {
+									<span class="item-img placeholder">—</span>
+								}
+								<span class="item-name">{ a.Label }</span>
+							</label>
+						}
+					</div>
+				</div>
 			</div>
-		</div>
+
+			<div class="btn-row section-gap">
+				<button class="btn primary" type="submit">Save loadout</button>
+				<button class="btn ghost" type="button" data-act="reset-loadout">Reset to defaults</button>
+			</div>
+			<p class="hint">Cosmetics are server-side only — other players see them, your inventory does not change. Your selection is stored per SteamID64 and applied server-side when the map loads you in.</p>
+		</form>
 	}
 }

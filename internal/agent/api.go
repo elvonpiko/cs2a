@@ -39,6 +39,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/server/restart", auth(a.action("restart")))
 	mux.HandleFunc("POST /api/v1/server/exec", auth(a.handleExec))
 	mux.HandleFunc("GET /api/v1/maps", auth(a.handleMaps))
+	mux.HandleFunc("GET /api/v1/cosmetics", auth(a.handleCosmetics))
 	mux.HandleFunc("POST /api/v1/map", auth(a.handleMapChange))
 	mux.HandleFunc("GET /api/v1/settings", auth(a.handleGetSettings))
 	mux.HandleFunc("PUT /api/v1/settings", auth(a.handlePutSettings))
@@ -133,6 +134,19 @@ func (a *API) handleMaps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"maps": maps})
+}
+
+// handleCosmetics serves the knife/glove/agent catalogs (with local image
+// paths) so the panel can render pickers without hardcoding game data.
+func (a *API) handleCosmetics(w http.ResponseWriter, r *http.Request) {
+	gloves := Gloves()
+	tAgents, ctAgents := Agents()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"gloves":       gloves,
+		"agents_t":     tAgents,
+		"agents_ct":    ctAgents,
+		"sync_enabled": a.loadout.WPEnabled(),
+	})
 }
 
 func (a *API) handleMapChange(w http.ResponseWriter, r *http.Request) {

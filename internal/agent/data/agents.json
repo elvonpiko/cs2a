@@ -1,0 +1,392 @@
+[
+ {
+  "model": "",
+  "name": "Agent | Default",
+  "team": 2,
+  "image": ""
+ },
+ {
+  "model": "",
+  "name": "Agent | Default",
+  "team": 3,
+  "image": ""
+ },
+ {
+  "model": "tm_professional/tm_professional_varf5",
+  "name": "Bloody Darryl The Strapped | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4613.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantj",
+  "name": "'Blueberries' Buckshot | NSWC SEAL",
+  "team": 3,
+  "image": "/static/img/agents/agent-4619.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantl",
+  "name": "'Two Times' McCoy | TACP Cavalry",
+  "team": 3,
+  "image": "/static/img/agents/agent-4680.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_variante",
+  "name": "Cmdr. Mae 'Dead Cold' Jamison | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4711.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_variantf",
+  "name": "1st Lieutenant Farlow | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4712.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_variantg",
+  "name": "John 'Van Healen' Kask | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4713.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_varianth",
+  "name": "Bio-Haz Specialist | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4714.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_varianti",
+  "name": "Sergeant Bombson | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4715.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_variantj",
+  "name": "Chem-Haz Specialist | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4716.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_variantk",
+  "name": "Rezan the Redshirt | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-4718.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varf",
+  "name": "Sir Bloody Miami Darryl | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4726.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varg",
+  "name": "Safecracker Voltzmann | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4727.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varh",
+  "name": "Little Kev | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4728.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varj",
+  "name": "Getaway Sally | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4730.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_vari",
+  "name": "Number K | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4732.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varf1",
+  "name": "Sir Bloody Silent Darryl | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4733.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varf2",
+  "name": "Sir Bloody Skullhead Darryl | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4734.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varf3",
+  "name": "Sir Bloody Darryl Royale | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4735.png"
+ },
+ {
+  "model": "tm_professional/tm_professional_varf4",
+  "name": "Sir Bloody Loudmouth Darryl | The Professionals",
+  "team": 2,
+  "image": "/static/img/agents/agent-4736.png"
+ },
+ {
+  "model": "ctm_gendarmerie/ctm_gendarmerie_varianta",
+  "name": "Sous-Lieutenant Medic | Gendarmerie Nationale",
+  "team": 3,
+  "image": "/static/img/agents/agent-4749.png"
+ },
+ {
+  "model": "ctm_gendarmerie/ctm_gendarmerie_variantb",
+  "name": "Chem-Haz Capitaine | Gendarmerie Nationale",
+  "team": 3,
+  "image": "/static/img/agents/agent-4750.png"
+ },
+ {
+  "model": "ctm_gendarmerie/ctm_gendarmerie_variantc",
+  "name": "Chef d'Escadron Rouchard | Gendarmerie Nationale",
+  "team": 3,
+  "image": "/static/img/agents/agent-4751.png"
+ },
+ {
+  "model": "ctm_gendarmerie/ctm_gendarmerie_variantd",
+  "name": "Aspirant | Gendarmerie Nationale",
+  "team": 3,
+  "image": "/static/img/agents/agent-4752.png"
+ },
+ {
+  "model": "ctm_gendarmerie/ctm_gendarmerie_variante",
+  "name": "Officer Jacques Beltram | Gendarmerie Nationale",
+  "team": 3,
+  "image": "/static/img/agents/agent-4753.png"
+ },
+ {
+  "model": "ctm_swat/ctm_swat_variantk",
+  "name": "Lieutenant 'Tree Hugger' Farlow | SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-4756.png"
+ },
+ {
+  "model": "ctm_diver/ctm_diver_varianta",
+  "name": "Cmdr. Davida 'Goggles' Fernandez | SEAL Frogman",
+  "team": 3,
+  "image": "/static/img/agents/agent-4757.png"
+ },
+ {
+  "model": "ctm_diver/ctm_diver_variantb",
+  "name": "Cmdr. Frank 'Wet Sox' Baroud | SEAL Frogman",
+  "team": 3,
+  "image": "/static/img/agents/agent-4771.png"
+ },
+ {
+  "model": "ctm_diver/ctm_diver_variantc",
+  "name": "Lieutenant Rex Krikey | SEAL Frogman",
+  "team": 3,
+  "image": "/static/img/agents/agent-4772.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_varianta",
+  "name": "Elite Trapper Solman | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4773.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantb",
+  "name": "Crasswater The Forgotten | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4774.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantc",
+  "name": "Arno The Overgrown | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4775.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantd",
+  "name": "Col. Mangos Dabisi | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4776.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variante",
+  "name": "Vypa Sista of the Revolution | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4777.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantf",
+  "name": "Trapper Aggressor | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4778.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantb2",
+  "name": "'Medium Rare' Crasswater | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4780.png"
+ },
+ {
+  "model": "tm_jungle_raider/tm_jungle_raider_variantf2",
+  "name": "Trapper | Guerrilla Warfare",
+  "team": 2,
+  "image": "/static/img/agents/agent-4781.png"
+ },
+ {
+  "model": "tm_leet/tm_leet_variantg",
+  "name": "Ground Rebel  | Elite Crew",
+  "team": 2,
+  "image": "/static/img/agents/agent-5105.png"
+ },
+ {
+  "model": "tm_leet/tm_leet_varianth",
+  "name": "Osiris | Elite Crew",
+  "team": 2,
+  "image": "/static/img/agents/agent-5106.png"
+ },
+ {
+  "model": "tm_leet/tm_leet_varianti",
+  "name": "Prof. Shahmat | Elite Crew",
+  "team": 2,
+  "image": "/static/img/agents/agent-5107.png"
+ },
+ {
+  "model": "tm_leet/tm_leet_variantf",
+  "name": "The Elite Mr. Muhlik | Elite Crew",
+  "team": 2,
+  "image": "/static/img/agents/agent-5108.png"
+ },
+ {
+  "model": "tm_leet/tm_leet_variantj",
+  "name": "Jungle Rebel | Elite Crew",
+  "team": 2,
+  "image": "/static/img/agents/agent-5109.png"
+ },
+ {
+  "model": "tm_phoenix/tm_phoenix_varianth",
+  "name": "Soldier | Phoenix",
+  "team": 2,
+  "image": "/static/img/agents/agent-5205.png"
+ },
+ {
+  "model": "tm_phoenix/tm_phoenix_variantf",
+  "name": "Enforcer | Phoenix",
+  "team": 2,
+  "image": "/static/img/agents/agent-5206.png"
+ },
+ {
+  "model": "tm_phoenix/tm_phoenix_variantg",
+  "name": "Slingshot | Phoenix",
+  "team": 2,
+  "image": "/static/img/agents/agent-5207.png"
+ },
+ {
+  "model": "tm_phoenix/tm_phoenix_varianti",
+  "name": "Street Soldier | Phoenix",
+  "team": 2,
+  "image": "/static/img/agents/agent-5208.png"
+ },
+ {
+  "model": "ctm_fbi/ctm_fbi_variantf",
+  "name": "Operator | FBI SWAT",
+  "team": 3,
+  "image": "/static/img/agents/agent-5305.png"
+ },
+ {
+  "model": "ctm_fbi/ctm_fbi_variantg",
+  "name": "Markus Delrow | FBI HRT",
+  "team": 3,
+  "image": "/static/img/agents/agent-5306.png"
+ },
+ {
+  "model": "ctm_fbi/ctm_fbi_varianth",
+  "name": "Michael Syfers  | FBI Sniper",
+  "team": 3,
+  "image": "/static/img/agents/agent-5307.png"
+ },
+ {
+  "model": "ctm_fbi/ctm_fbi_variantb",
+  "name": "Special Agent Ava | FBI",
+  "team": 3,
+  "image": "/static/img/agents/agent-5308.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantk",
+  "name": "3rd Commando Company | KSK",
+  "team": 3,
+  "image": "/static/img/agents/agent-5400.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variante",
+  "name": "Seal Team 6 Soldier | NSWC SEAL",
+  "team": 3,
+  "image": "/static/img/agents/agent-5401.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantg",
+  "name": "Buckshot | NSWC SEAL",
+  "team": 3,
+  "image": "/static/img/agents/agent-5402.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantm",
+  "name": "'Two Times' McCoy | USAF TACP",
+  "team": 3,
+  "image": "/static/img/agents/agent-5403.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_varianti",
+  "name": "Lt. Commander Ricksaw | NSWC SEAL",
+  "team": 3,
+  "image": "/static/img/agents/agent-5404.png"
+ },
+ {
+  "model": "ctm_st6/ctm_st6_variantn",
+  "name": "Primeiro Tenente | Brazilian 1st Battalion",
+  "team": 3,
+  "image": "/static/img/agents/agent-5405.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_variantf",
+  "name": "Dragomir | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-5500.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_varianti",
+  "name": "Maximus | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-5501.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_variantg",
+  "name": "Rezan The Ready | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-5502.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_variantj",
+  "name": "Blackwolf | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-5503.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_varianth",
+  "name": "'The Doctor' Romanov | Sabre",
+  "team": 2,
+  "image": "/static/img/agents/agent-5504.png"
+ },
+ {
+  "model": "tm_balkan/tm_balkan_variantl",
+  "name": "Dragomir | Sabre Footsoldier",
+  "team": 2,
+  "image": "/static/img/agents/agent-5505.png"
+ },
+ {
+  "model": "ctm_sas/ctm_sas_variantf",
+  "name": "B Squadron Officer | SAS",
+  "team": 3,
+  "image": "/static/img/agents/agent-5601.png"
+ },
+ {
+  "model": "ctm_sas/ctm_sas_variantg",
+  "name": "D Squadron Officer | NZSAS",
+  "team": 3,
+  "image": "/static/img/agents/agent-5602.png"
+ }
+]

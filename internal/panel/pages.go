@@ -476,14 +476,27 @@ var knifeCatalog = []web.KnifeOption{
 func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	v := web.LoadoutView{SteamID: u.SteamID64, KnifeNames: knifeCatalog}
+	// catalogs (gloves/agents) come from the agent; fall back to empty lists
+	if gloves, agentsT, agentsCT, err := s.agent.Cosmetics(r.Context()); err == nil {
+		for _, g := range gloves {
+			v.Gloves = append(v.Gloves, web.GloveOption{Value: gloveValue(g.Defindex, g.Paint), Label: g.Name, Image: g.Image})
+		}
+		for _, a := range agentsT {
+			v.AgentsT = append(v.AgentsT, web.AgentOption{Value: a.Model, Label: a.Name, Image: a.Image})
+		}
+		for _, a := range agentsCT {
+			v.AgentsCT = append(v.AgentsCT, web.AgentOption{Value: a.Model, Label: a.Name, Image: a.Image})
+		}
+	}
 	if u.SteamID64 != "" {
 		lo, err := s.agent.GetLoadout(r.Context(), u.SteamID64)
-		if err != nil {
-			// agent may be down; show the page with defaults
-			v.SteamID = u.SteamID64
-		} else {
+		if err == nil {
 			v.KnifeT = lo.KnifeT
 			v.KnifeCT = lo.KnifeCT
+			v.GlovesT = lo.GlovesT
+			v.GlovesCT = lo.GlovesCT
+			v.AgentT = lo.AgentT
+			v.AgentCT = lo.AgentCT
 			v.SyncEnabled = lo.SyncEnabled
 		}
 	}
@@ -493,20 +506,59 @@ func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// gloveValue encodes a glove as "<defindex>:<paint>" (default = "").
+func gloveValue(defindex, paint int) string {
+	if defindex == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", defindex, paint)
+}
+
 func (s *Server) handleLoadoutPost(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	if u.SteamID64 == "" {
 		redirectFlash(w, r, "/loadout", "err", "An admin must link a SteamID to your account first.")
 		return
 	}
-	knifeT := validKnife(r.FormValue("knife_t"))
-	knifeCT := validKnife(r.FormValue("knife_ct"))
-	if err := s.agent.PutLoadout(r.Context(), u.SteamID64, knifeT, knifeCT); err != nil {
+	lo := &PlayerLoadout{
+		KnifeT:   validKnife(r.FormValue("knife_t")),
+		KnifeCT:  validKnife(r.FormValue("knife_ct")),
+		GlovesT:  validGlove(r.FormValue("gloves_t")),
+		GlovesCT: validGlove(r.FormValue("gloves_ct")),
+		AgentT:   validAgent(r.FormValue("agent_t")),
+		AgentCT:  validAgent(r.FormValue("agent_ct")),
+	}
+	if err := s.agent.PutLoadout(r.Context(), u.SteamID64, lo); err != nil {
 		redirectFlash(w, r, "/loadout", "err", "Save failed: "+err.Error())
 		return
 	}
-	s.store.Audit(u.Username, "loadout.save", "t="+knifeT+" ct="+knifeCT)
+	s.store.Audit(u.Username, "loadout.save", "t="+lo.KnifeT+" ct="+lo.KnifeCT+" gloves="+lo.GlovesT+"/"+lo.GlovesCT+" agents="+lo.AgentT+"/"+lo.AgentCT)
 	redirectFlash(w, r, "/loadout", "ok", "Loadout saved — it applies when you (re)connect. Use !wp in game to force a refresh.")
+}
+
+// validGlove keeps "<defindex>:<paint>" or empty.
+func validGlove(v string) string {
+	if v == "" {
+		return ""
+	}
+	var d, p int
+	if _, err := fmt.Sscanf(v, "%d:%d", &d, &p); err != nil || d <= 0 {
+		return ""
+	}
+	return v
+}
+
+// validAgent keeps model-path-looking strings (no spaces/quotes).
+func validAgent(v string) string {
+	if v == "" {
+		return ""
+	}
+	for _, r := range v {
+		if r == ' ' || r == '"' || r == '\'' {
+			return ""
+		}
+	}
+	return v
 }
 
 func validKnife(v string) string {

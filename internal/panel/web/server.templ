@@ -116,7 +116,11 @@ templ StatusCard(v ServerView) {
 				}
 			</div>
 		</div>
-		<div class="stat-grid">
+		<div class="map-banner">
+		<img src={ mapImage(v.Map) } alt={ v.Map } onerror="this.style.display='none'"/>
+		<span class="map-label mono">{ v.Map }</span>
+	</div>
+	<div class="stat-grid">
 			<div class="stat">
 				<div class="k">Current map</div>
 				<div class="v mono">{ v.Map }</div>

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // registered as "mysql", used only when wp_dsn is set
@@ -43,8 +45,11 @@ func (l *LoadoutStore) Close() {
 	}
 }
 
-// Loadout is a player's cosmetic selection. Knife values are WeaponPaints
-// model names ("weapon_knife_karambit"); gloves are defindexes as strings.
+// Loadout is a player's cosmetic selection.
+//   - knives: WeaponPaints model names ("weapon_knife_karambit") → wp_player_knife.knife
+//   - gloves: "<defindex>:<paint>" (e.g. "5032:10010") → defindex into
+//     wp_player_gloves.weapon_defindex and the paint kit into wp_player_skins
+//   - agents: model path ("ctm_st6/ctm_st6_variantj") → wp_player_agents.agent_t/agent_ct
 type Loadout struct {
 	KnifeT   string `json:"knife_t"`
 	KnifeCT  string `json:"knife_ct"`
@@ -113,14 +118,28 @@ func (l *LoadoutStore) syncWP(steamid string, lo Loadout) error {
 		}
 	}
 	for team, glove := range map[int]string{2: lo.GlovesT, 3: lo.GlovesCT} {
-		if glove == "" {
+		if glove == "" || glove == "default" {
 			continue
+		}
+		defindex, paint, ok := parseGlove(glove)
+		if !ok {
+			return fmt.Errorf("loadout: bad glove value %q (want \"<defindex>:<paint>\")", glove)
 		}
 		if _, err := l.wp.ExecContext(ctx,
 			`INSERT INTO wp_player_gloves (steamid, weapon_team, weapon_defindex) VALUES (?, ?, ?)
 			 ON DUPLICATE KEY UPDATE weapon_defindex = VALUES(weapon_defindex)`,
-			steamid, team, glove); err != nil {
+			steamid, team, defindex); err != nil {
 			return err
+		}
+		// the paint kit lives in the skins table keyed by the glove defindex
+		if paint != 0 {
+			if _, err := l.wp.ExecContext(ctx,
+				`INSERT INTO wp_player_skins (steamid, weapon_defindex, weapon_team, weapon_paint_id, weapon_wear, weapon_seed)
+				 VALUES (?, ?, ?, ?, 0.000001, 0)
+				 ON DUPLICATE KEY UPDATE weapon_paint_id = VALUES(weapon_paint_id)`,
+				steamid, defindex, team, paint); err != nil {
+				return err
+			}
 		}
 	}
 	if lo.AgentT != "" || lo.AgentCT != "" {
@@ -132,6 +151,26 @@ func (l *LoadoutStore) syncWP(steamid string, lo Loadout) error {
 		}
 	}
 	return nil
+}
+
+// parseGlove splits "<defindex>:<paint>".
+func parseGlove(v string) (defindex, paint int64, ok bool) {
+	def, paintStr, found := strings.Cut(v, ":")
+	if !found {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n, 0, true
+		}
+		return 0, 0, false
+	}
+	defindex, err := strconv.ParseInt(def, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	paint, err = strconv.ParseInt(paintStr, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return defindex, paint, true
 }
 
 // --- plugin config files ------------------------------------------------

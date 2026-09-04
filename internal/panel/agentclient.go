@@ -248,29 +248,71 @@ func (c *AgentClient) PutWhitelist(ctx context.Context, ids []string) error {
 type PlayerLoadout struct {
 	KnifeT      string `json:"knife_t"`
 	KnifeCT     string `json:"knife_ct"`
+	GlovesT     string `json:"gloves_t,omitempty"`
+	GlovesCT    string `json:"gloves_ct,omitempty"`
+	AgentT      string `json:"agent_t,omitempty"`
+	AgentCT     string `json:"agent_ct,omitempty"`
 	SyncEnabled bool   `json:"-"`
+}
+
+// CosmeticEntry is one selectable glove/agent for the loadout UI.
+type CosmeticEntry struct {
+	Defindex int    `json:"defindex,omitempty"`
+	Paint    int    `json:"paint,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Name     string `json:"name"`
+	Image    string `json:"image,omitempty"`
+}
+
+// Cosmetics fetches the glove/agent catalogs from the agent.
+func (c *AgentClient) Cosmetics(ctx context.Context) (gloves, agentsT, agentsCT []CosmeticEntry, err error) {
+	var out struct {
+		Gloves   []CosmeticEntry `json:"gloves"`
+		AgentsT  []CosmeticEntry `json:"agents_t"`
+		AgentsCT []CosmeticEntry `json:"agents_ct"`
+	}
+	if err = c.do(ctx, http.MethodGet, "/api/v1/cosmetics", nil, &out); err != nil {
+		return nil, nil, nil, err
+	}
+	return out.Gloves, out.AgentsT, out.AgentsCT, nil
 }
 
 // GetLoadout fetches a player's loadout from the agent store.
 func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (*PlayerLoadout, error) {
 	var out struct {
 		Loadout struct {
-			KnifeT  string `json:"knife_t"`
-			KnifeCT string `json:"knife_ct"`
+			KnifeT   string `json:"knife_t"`
+			KnifeCT  string `json:"knife_ct"`
+			GlovesT  string `json:"gloves_t"`
+			GlovesCT string `json:"gloves_ct"`
+			AgentT   string `json:"agent_t"`
+			AgentCT  string `json:"agent_ct"`
 		} `json:"loadout"`
 		SyncEnabled bool `json:"sync_enabled"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/api/v1/loadout/"+steamid, nil, &out); err != nil {
 		return nil, err
 	}
-	return &PlayerLoadout{KnifeT: out.Loadout.KnifeT, KnifeCT: out.Loadout.KnifeCT, SyncEnabled: out.SyncEnabled}, nil
+	return &PlayerLoadout{
+		KnifeT:      out.Loadout.KnifeT,
+		KnifeCT:     out.Loadout.KnifeCT,
+		GlovesT:     out.Loadout.GlovesT,
+		GlovesCT:    out.Loadout.GlovesCT,
+		AgentT:      out.Loadout.AgentT,
+		AgentCT:     out.Loadout.AgentCT,
+		SyncEnabled: out.SyncEnabled,
+	}, nil
 }
 
-// PutLoadout pushes a player's knife selection to the agent (which syncs to
-// WeaponPaints' MySQL when configured).
-func (c *AgentClient) PutLoadout(ctx context.Context, steamid, knifeT, knifeCT string) error {
+// PutLoadout pushes a player's cosmetic selection to the agent (which syncs
+// to WeaponPaints' MySQL when configured).
+func (c *AgentClient) PutLoadout(ctx context.Context, steamid string, lo *PlayerLoadout) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/loadout/"+steamid,
-		map[string]any{"loadout": map[string]any{"knife_t": knifeT, "knife_ct": knifeCT}}, nil)
+		map[string]any{"loadout": map[string]any{
+			"knife_t": lo.KnifeT, "knife_ct": lo.KnifeCT,
+			"gloves_t": lo.GlovesT, "gloves_ct": lo.GlovesCT,
+			"agent_t": lo.AgentT, "agent_ct": lo.AgentCT,
+		}}, nil)
 }
 
 // PluginConfig fetches a plugin's config JSON (pretty-printed).

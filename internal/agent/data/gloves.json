@@ -1,0 +1,572 @@
+[
+ {
+  "defindex": 0,
+  "paint": 0,
+  "name": "Default (no gloves)",
+  "image": ""
+ },
+ {
+  "defindex": 5032,
+  "paint": 10010,
+  "name": "★ Hand Wraps | Spruce DDPAT",
+  "image": "/static/img/gloves/leather_handwraps-10010.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10081,
+  "name": "★ Hand Wraps | Desert Shamagh",
+  "image": "/static/img/gloves/leather_handwraps-10081.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10036,
+  "name": "★ Hand Wraps | Badlands",
+  "image": "/static/img/gloves/leather_handwraps-10036.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10084,
+  "name": "★ Hand Wraps | CAUTION!",
+  "image": "/static/img/gloves/leather_handwraps-10084.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10055,
+  "name": "★ Hand Wraps | Duct Tape",
+  "image": "/static/img/gloves/leather_handwraps-10055.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10053,
+  "name": "★ Hand Wraps | Cobalt Skulls",
+  "image": "/static/img/gloves/leather_handwraps-10053.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10054,
+  "name": "★ Hand Wraps | Overprint",
+  "image": "/static/img/gloves/leather_handwraps-10054.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10082,
+  "name": "★ Hand Wraps | Giraffe",
+  "image": "/static/img/gloves/leather_handwraps-10082.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10056,
+  "name": "★ Hand Wraps | Arboreal",
+  "image": "/static/img/gloves/leather_handwraps-10056.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10009,
+  "name": "★ Hand Wraps | Leather",
+  "image": "/static/img/gloves/leather_handwraps-10009.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10083,
+  "name": "★ Hand Wraps | Constrictor",
+  "image": "/static/img/gloves/leather_handwraps-10083.png"
+ },
+ {
+  "defindex": 5032,
+  "paint": 10021,
+  "name": "★ Hand Wraps | Slaughter",
+  "image": "/static/img/gloves/leather_handwraps-10021.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10024,
+  "name": "★ Moto Gloves | Eclipse",
+  "image": "/static/img/gloves/motorcycle_gloves-10024.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10050,
+  "name": "★ Moto Gloves | Turtle",
+  "image": "/static/img/gloves/motorcycle_gloves-10050.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10079,
+  "name": "★ Moto Gloves | Blood Pressure",
+  "image": "/static/img/gloves/motorcycle_gloves-10079.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10077,
+  "name": "★ Moto Gloves | Finish Line",
+  "image": "/static/img/gloves/motorcycle_gloves-10077.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10049,
+  "name": "★ Moto Gloves | POW!",
+  "image": "/static/img/gloves/motorcycle_gloves-10049.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10080,
+  "name": "★ Moto Gloves | 3rd Commando Company",
+  "image": "/static/img/gloves/motorcycle_gloves-10080.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10026,
+  "name": "★ Moto Gloves | Spearmint",
+  "image": "/static/img/gloves/motorcycle_gloves-10026.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10027,
+  "name": "★ Moto Gloves | Boom!",
+  "image": "/static/img/gloves/motorcycle_gloves-10027.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10078,
+  "name": "★ Moto Gloves | Smoke Out",
+  "image": "/static/img/gloves/motorcycle_gloves-10078.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10028,
+  "name": "★ Moto Gloves | Cool Mint",
+  "image": "/static/img/gloves/motorcycle_gloves-10028.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10052,
+  "name": "★ Moto Gloves | Polygon",
+  "image": "/static/img/gloves/motorcycle_gloves-10052.png"
+ },
+ {
+  "defindex": 5033,
+  "paint": 10051,
+  "name": "★ Moto Gloves | Transport",
+  "image": "/static/img/gloves/motorcycle_gloves-10051.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1398,
+  "name": "★ Driver Gloves | Wave Chaser",
+  "image": "/static/img/gloves/slick_gloves-1398.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1404,
+  "name": "★ Driver Gloves | Seigaiha",
+  "image": "/static/img/gloves/slick_gloves-1404.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1412,
+  "name": "★ Driver Gloves | Plum Quill",
+  "image": "/static/img/gloves/slick_gloves-1412.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1439,
+  "name": "★ Driver Gloves | Hand Sweaters",
+  "image": "/static/img/gloves/slick_gloves-1439.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1402,
+  "name": "★ Driver Gloves | Garden",
+  "image": "/static/img/gloves/slick_gloves-1402.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1401,
+  "name": "★ Driver Gloves | Dragon Fists",
+  "image": "/static/img/gloves/slick_gloves-1401.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1400,
+  "name": "★ Driver Gloves | Brocade Flowers",
+  "image": "/static/img/gloves/slick_gloves-1400.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 1399,
+  "name": "★ Driver Gloves | Brocade Crane",
+  "image": "/static/img/gloves/slick_gloves-1399.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10013,
+  "name": "★ Driver Gloves | Lunar Weave",
+  "image": "/static/img/gloves/slick_gloves-10013.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10070,
+  "name": "★ Driver Gloves | Snow Leopard",
+  "image": "/static/img/gloves/slick_gloves-10070.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10071,
+  "name": "★ Driver Gloves | Queen Jaguar",
+  "image": "/static/img/gloves/slick_gloves-10071.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10015,
+  "name": "★ Driver Gloves | Convoy",
+  "image": "/static/img/gloves/slick_gloves-10015.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10042,
+  "name": "★ Driver Gloves | Imperial Plaid",
+  "image": "/static/img/gloves/slick_gloves-10042.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10016,
+  "name": "★ Driver Gloves | Crimson Weave",
+  "image": "/static/img/gloves/slick_gloves-10016.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10069,
+  "name": "★ Driver Gloves | Rezan the Red",
+  "image": "/static/img/gloves/slick_gloves-10069.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10041,
+  "name": "★ Driver Gloves | King Snake",
+  "image": "/static/img/gloves/slick_gloves-10041.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10040,
+  "name": "★ Driver Gloves | Diamondback",
+  "image": "/static/img/gloves/slick_gloves-10040.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10043,
+  "name": "★ Driver Gloves | Overtake",
+  "image": "/static/img/gloves/slick_gloves-10043.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10072,
+  "name": "★ Driver Gloves | Black Tie",
+  "image": "/static/img/gloves/slick_gloves-10072.png"
+ },
+ {
+  "defindex": 5031,
+  "paint": 10044,
+  "name": "★ Driver Gloves | Racing Green",
+  "image": "/static/img/gloves/slick_gloves-10044.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1416,
+  "name": "★ Specialist Gloves | Sunburst",
+  "image": "/static/img/gloves/specialist_gloves-1416.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1438,
+  "name": "★ Specialist Gloves | Pillow Punchers",
+  "image": "/static/img/gloves/specialist_gloves-1438.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1413,
+  "name": "★ Specialist Gloves | Lime Polycam",
+  "image": "/static/img/gloves/specialist_gloves-1413.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1440,
+  "name": "★ Specialist Gloves | Cloud Chaser",
+  "image": "/static/img/gloves/specialist_gloves-1440.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1415,
+  "name": "★ Specialist Gloves | Chocolate Chesterfield",
+  "image": "/static/img/gloves/specialist_gloves-1415.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1414,
+  "name": "★ Specialist Gloves | Blackbook",
+  "image": "/static/img/gloves/specialist_gloves-1414.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 1437,
+  "name": "★ Specialist Gloves | Big Swell",
+  "image": "/static/img/gloves/specialist_gloves-1437.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10030,
+  "name": "★ Specialist Gloves | Forest DDPAT",
+  "image": "/static/img/gloves/specialist_gloves-10030.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10034,
+  "name": "★ Specialist Gloves | Emerald Web",
+  "image": "/static/img/gloves/specialist_gloves-10034.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10063,
+  "name": "★ Specialist Gloves | Fade",
+  "image": "/static/img/gloves/specialist_gloves-10063.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10068,
+  "name": "★ Specialist Gloves | Field Agent",
+  "image": "/static/img/gloves/specialist_gloves-10068.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10062,
+  "name": "★ Specialist Gloves | Buckshot",
+  "image": "/static/img/gloves/specialist_gloves-10062.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10033,
+  "name": "★ Specialist Gloves | Crimson Kimono",
+  "image": "/static/img/gloves/specialist_gloves-10033.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10065,
+  "name": "★ Specialist Gloves | Marble Fade",
+  "image": "/static/img/gloves/specialist_gloves-10065.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10035,
+  "name": "★ Specialist Gloves | Foundation",
+  "image": "/static/img/gloves/specialist_gloves-10035.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10066,
+  "name": "★ Specialist Gloves | Lt. Commander",
+  "image": "/static/img/gloves/specialist_gloves-10066.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10067,
+  "name": "★ Specialist Gloves | Tiger Strike",
+  "image": "/static/img/gloves/specialist_gloves-10067.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10061,
+  "name": "★ Specialist Gloves | Crimson Web",
+  "image": "/static/img/gloves/specialist_gloves-10061.png"
+ },
+ {
+  "defindex": 5034,
+  "paint": 10064,
+  "name": "★ Specialist Gloves | Mogul",
+  "image": "/static/img/gloves/specialist_gloves-10064.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1405,
+  "name": "★ Sport Gloves | Violet Beadwork",
+  "image": "/static/img/gloves/sporty_gloves-1405.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1410,
+  "name": "★ Sport Gloves | Ultra Violent",
+  "image": "/static/img/gloves/sporty_gloves-1410.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1409,
+  "name": "★ Sport Gloves | Red Racer",
+  "image": "/static/img/gloves/sporty_gloves-1409.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1417,
+  "name": "★ Sport Gloves | Occult",
+  "image": "/static/img/gloves/sporty_gloves-1417.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1406,
+  "name": "★ Sport Gloves | Frosty",
+  "image": "/static/img/gloves/sporty_gloves-1406.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1408,
+  "name": "★ Sport Gloves | Creme Pinstripe",
+  "image": "/static/img/gloves/sporty_gloves-1408.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 1407,
+  "name": "★ Sport Gloves | Blaze",
+  "image": "/static/img/gloves/sporty_gloves-1407.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10047,
+  "name": "★ Sport Gloves | Omega",
+  "image": "/static/img/gloves/sporty_gloves-10047.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10048,
+  "name": "★ Sport Gloves | Vice",
+  "image": "/static/img/gloves/sporty_gloves-10048.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10038,
+  "name": "★ Sport Gloves | Hedge Maze",
+  "image": "/static/img/gloves/sporty_gloves-10038.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10075,
+  "name": "★ Sport Gloves | Scarlet Shamagh",
+  "image": "/static/img/gloves/sporty_gloves-10075.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10074,
+  "name": "★ Sport Gloves | Big Game",
+  "image": "/static/img/gloves/sporty_gloves-10074.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10076,
+  "name": "★ Sport Gloves | Nocts",
+  "image": "/static/img/gloves/sporty_gloves-10076.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10018,
+  "name": "★ Sport Gloves | Superconductor",
+  "image": "/static/img/gloves/sporty_gloves-10018.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10019,
+  "name": "★ Sport Gloves | Arid",
+  "image": "/static/img/gloves/sporty_gloves-10019.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10045,
+  "name": "★ Sport Gloves | Amphibious",
+  "image": "/static/img/gloves/sporty_gloves-10045.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10046,
+  "name": "★ Sport Gloves | Bronze Morph",
+  "image": "/static/img/gloves/sporty_gloves-10046.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10037,
+  "name": "★ Sport Gloves | Pandora's Box",
+  "image": "/static/img/gloves/sporty_gloves-10037.png"
+ },
+ {
+  "defindex": 5030,
+  "paint": 10073,
+  "name": "★ Sport Gloves | Slingshot",
+  "image": "/static/img/gloves/sporty_gloves-10073.png"
+ },
+ {
+  "defindex": 5027,
+  "paint": 10006,
+  "name": "★ Bloodhound Gloves | Charred",
+  "image": "/static/img/gloves/studded_bloodhound_gloves-10006.png"
+ },
+ {
+  "defindex": 5027,
+  "paint": 10039,
+  "name": "★ Bloodhound Gloves | Guerrilla",
+  "image": "/static/img/gloves/studded_bloodhound_gloves-10039.png"
+ },
+ {
+  "defindex": 5027,
+  "paint": 10008,
+  "name": "★ Bloodhound Gloves | Bronzed",
+  "image": "/static/img/gloves/studded_bloodhound_gloves-10008.png"
+ },
+ {
+  "defindex": 5027,
+  "paint": 10007,
+  "name": "★ Bloodhound Gloves | Snakebite",
+  "image": "/static/img/gloves/studded_bloodhound_gloves-10007.png"
+ },
+ {
+  "defindex": 4725,
+  "paint": 10087,
+  "name": "★ Broken Fang Gloves | Needle Point",
+  "image": "/static/img/gloves/studded_brokenfang_gloves-10087.png"
+ },
+ {
+  "defindex": 4725,
+  "paint": 10085,
+  "name": "★ Broken Fang Gloves | Jade",
+  "image": "/static/img/gloves/studded_brokenfang_gloves-10085.png"
+ },
+ {
+  "defindex": 4725,
+  "paint": 10086,
+  "name": "★ Broken Fang Gloves | Yellow-banded",
+  "image": "/static/img/gloves/studded_brokenfang_gloves-10086.png"
+ },
+ {
+  "defindex": 4725,
+  "paint": 10088,
+  "name": "★ Broken Fang Gloves | Unhinged",
+  "image": "/static/img/gloves/studded_brokenfang_gloves-10088.png"
+ },
+ {
+  "defindex": 5035,
+  "paint": 10057,
+  "name": "★ Hydra Gloves | Emerald",
+  "image": "/static/img/gloves/studded_hydra_gloves-10057.png"
+ },
+ {
+  "defindex": 5035,
+  "paint": 10060,
+  "name": "★ Hydra Gloves | Case Hardened",
+  "image": "/static/img/gloves/studded_hydra_gloves-10060.png"
+ },
+ {
+  "defindex": 5035,
+  "paint": 10058,
+  "name": "★ Hydra Gloves | Mangrove",
+  "image": "/static/img/gloves/studded_hydra_gloves-10058.png"
+ },
+ {
+  "defindex": 5035,
+  "paint": 10059,
+  "name": "★ Hydra Gloves | Rattler",
+  "image": "/static/img/gloves/studded_hydra_gloves-10059.png"
+ }
+]

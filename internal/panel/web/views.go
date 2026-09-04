@@ -2,24 +2,20 @@ package web
 
 import "strconv"
 
+// mapImage resolves a map name to its bundled preview image ("" if unknown
+// — the template hides the img in that case).
+func mapImage(mapName string) string {
+	if mapName == "" {
+		return ""
+	}
+	return "/static/img/maps/" + mapName + ".jpg"
+}
+
 // fmtInt renders an int for templ text nodes.
 func fmtInt(n int) string { return strconv.Itoa(n) }
 
 // fmtInt64 renders an int64 for templ attribute values.
 func fmtInt64(n int64) string { return strconv.FormatInt(n, 10) }
-
-// knifeLabel resolves a knife value to its display label.
-func knifeLabel(value string, opts []KnifeOption) string {
-	if value == "" {
-		return "default"
-	}
-	for _, o := range opts {
-		if o.Value == value {
-			return o.Label
-		}
-	}
-	return value
-}
 
 // ServerView is the view model for the server page (both roles).
 type ServerView struct {
@@ -88,14 +84,35 @@ type LoadoutView struct {
 	SteamID     string
 	KnifeT      string
 	KnifeCT     string
+	GlovesT     string
+	GlovesCT    string
+	AgentT      string
+	AgentCT     string
 	SyncEnabled bool
 	KnifeNames  []KnifeOption
+	Gloves      []GloveOption
+	AgentsT     []AgentOption
+	AgentsCT    []AgentOption
 }
 
 // KnifeOption is one selectable knife.
 type KnifeOption struct {
 	Value string
 	Label string
+}
+
+// GloveOption is one selectable glove pair (Value = "<defindex>:<paint>").
+type GloveOption struct {
+	Value string
+	Label string
+	Image string
+}
+
+// AgentOption is one selectable agent model (Value = model path).
+type AgentOption struct {
+	Value string
+	Label string
+	Image string
 }
 
 // AccessView is the admin access page model.

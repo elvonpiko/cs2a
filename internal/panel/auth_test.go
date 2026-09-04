@@ -77,8 +77,10 @@ func TestAgentClientPaths(t *testing.T) {
 				} else {
 					w.Write([]byte(`{"steamids":[]}`))
 				}
+			case "/api/v1/cosmetics":
+				w.Write([]byte(`{"gloves":[{"defindex":5032,"paint":10010,"name":"Hand Wraps","image":"/static/img/gloves/x.png"}],"agents_t":[{"model":"tm_leet_variantf","name":"Elite Crew","team":2}],"agents_ct":[{"model":"ctm_st6_variantj","name":"SEAL","team":3}]}`))
 			case "/api/v1/loadout/76561197961500295":
-				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit","knife_ct":"weapon_bayonet"},"sync_enabled":true}`))
+				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit","knife_ct":"weapon_bayonet","gloves_t":"5032:10010","gloves_ct":"5031:10008","agent_t":"tm_leet_variantf","agent_ct":"ctm_st6_variantj"},"sync_enabled":true}`))
 			case "/api/v1/broken":
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(`{"error":"boom"}`))
@@ -143,12 +145,17 @@ func TestAgentClientPaths(t *testing.T) {
 		t.Fatalf("whitelist = %v %v", ids, err)
 	}
 
-	// loadout round trip
-	if err := c.PutLoadout(ctx, "76561197961500295", "weapon_knife_karambit", "weapon_bayonet"); err != nil {
+	// loadout round trip (all six cosmetic fields)
+	if err := c.PutLoadout(ctx, "76561197961500295", &PlayerLoadout{
+		KnifeT: "weapon_knife_karambit", KnifeCT: "weapon_bayonet",
+		GlovesT: "5032:10010", GlovesCT: "5031:10008",
+		AgentT: "tm_leet_variantf", AgentCT: "ctm_st6_variantj",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	lo, err := c.GetLoadout(ctx, "76561197961500295")
-	if err != nil || lo.KnifeT != "weapon_knife_karambit" || lo.KnifeCT != "weapon_bayonet" {
+	if err != nil || lo.KnifeT != "weapon_knife_karambit" || lo.KnifeCT != "weapon_bayonet" ||
+		lo.GlovesT != "5032:10010" || lo.AgentCT != "ctm_st6_variantj" {
 		t.Fatalf("loadout = %+v %v", lo, err)
 	}
 

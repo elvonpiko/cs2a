@@ -225,6 +225,8 @@ func (in *Installer) runPostInstall(step string) error {
 		return patchGameinfoMetamod(filepath.Join(in.cfg.CSGODir(), "gameinfo.gi"))
 	case "guidelines-off":
 		return patchCoreGuidelines(filepath.Join(in.cfg.CSGODir(), "addons", "counterstrikesharp", "configs", "core.json"))
+	case "wp-default-config":
+		return in.writeWeaponPaintsDefaultConfig()
 	default:
 		return fmt.Errorf("plugins: unknown post-install step %q", step)
 	}
