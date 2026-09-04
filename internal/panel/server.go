@@ -81,7 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /do/start", s.admin(s.handleServerAction("start")))
 	mux.HandleFunc("POST /do/stop", s.admin(s.handleServerAction("stop")))
 	mux.HandleFunc("POST /do/restart", s.admin(s.handleServerAction("restart")))
-	mux.HandleFunc("POST /do/map", s.admin(s.handleMapChange))
+	mux.HandleFunc("POST /do/map", s.auth(s.handleMapChange))
 
 	return s.logMiddleware(mux)
 }

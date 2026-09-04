@@ -23,12 +23,18 @@ type fakeAgent struct {
 	mapsBody   string
 	actions    []string
 	password   string
+	changemap  string
 	whitelist  []string
 	loadout    map[string][2]string
 	plugins    string
 }
 
 func (f *fakeAgent) handler() http.Handler {
+	return f.handlerWithRef(nil)
+}
+
+func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
+	faRef := ref
 	mux := http.NewServeMux()
 	check := func(w http.ResponseWriter, r *http.Request) bool {
 		if r.Header.Get("Authorization") != "Bearer agenttok" {
@@ -51,6 +57,19 @@ func (f *fakeAgent) handler() http.Handler {
 			return
 		}
 		w.Write([]byte(`{"maps":["de_dust2","de_mirage"]}`))
+	})
+	mux.HandleFunc("POST /api/v1/map", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		var req struct {
+			Map string `json:"map"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if faRef != nil {
+			faRef.changemap = req.Map
+		}
+		w.Write([]byte(`{"ok":true,"map":"` + req.Map + `"}`))
 	})
 	for _, action := range []string{"start", "stop", "restart"} {
 		mux.HandleFunc("POST /api/v1/server/"+action, func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +191,7 @@ func newPanelTest(t *testing.T) (*http.Client, *fakeAgent, string) {
 		statusBody: fakeStatusRunning,
 		plugins:    `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"]},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime"}]}`,
 	}
-	agentTS := httptest.NewServer(fa.handler())
+	agentTS := httptest.NewServer(fa.handlerWithRef(fa))
 	t.Cleanup(agentTS.Close)
 
 	cfg := DefaultConfig()
@@ -345,7 +364,7 @@ func TestPanelRolesAndActions(t *testing.T) {
 		t.Fatalf("player /plugins: %d", resp.StatusCode)
 	}
 
-	// player CAN see server page
+	// player CAN see server page with map change, but not lifecycle controls
 	resp2, err := pclient.Get(base + "/")
 	if err != nil {
 		t.Fatal(err)
@@ -354,8 +373,17 @@ func TestPanelRolesAndActions(t *testing.T) {
 	if !strings.Contains(body, "de_dust2") {
 		t.Fatalf("player server page missing status")
 	}
-	if strings.Contains(body, "/do/restart") {
+	if strings.Contains(body, "/do/restart") || strings.Contains(body, "/do/stop") {
 		t.Fatalf("player server page must not expose admin actions")
+	}
+	if !strings.Contains(body, "/do/map") {
+		t.Fatalf("player must be able to change map")
+	}
+	if resp := postForm(t, pclient, base+"/do/map", url.Values{"map": {"de_mirage"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("player map change: %d", resp.StatusCode)
+	}
+	if fa.changemap != "de_mirage" {
+		t.Fatalf("agent changemap = %q", fa.changemap)
 	}
 
 	// player saves loadout

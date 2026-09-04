@@ -352,3 +352,37 @@ dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 	position: absolute; left: 10px; bottom: 8px; padding: 3px 8px; border-radius: 6px;
 	background: rgba(8, 10, 16, .72); font-size: 12px; font-weight: 600; letter-spacing: .04em;
 }
+
+/* --- layout balance: cards keep natural height in grids ---------------- */
+.grid { align-items: start; }
+
+/* --- card section divider ----------------------------------------------- */
+.card .divider { border: 0; border-top: 1px dashed var(--border); margin: 16px 0; }
+.sub-label { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+
+/* --- map banner: taller for the HQ images -------------------------------- */
+.map-banner img { height: 170px; opacity: .92; }
+
+/* --- styled confirm dialog ----------------------------------------------- */
+.modal-overlay {
+	position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center;
+	background: rgba(5, 7, 12, .55); backdrop-filter: blur(4px);
+	animation: fadeIn .16s ease both;
+}
+.modal-card {
+	width: min(420px, calc(100vw - 40px)); background: var(--card); border: 1px solid var(--border);
+	border-radius: 16px; padding: 22px; box-shadow: 0 24px 70px rgba(0,0,0,.5);
+	animation: modalRise .22s cubic-bezier(.2,.9,.3,1) both;
+}
+@keyframes modalRise { from { opacity: 0; transform: translateY(14px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal-icon {
+	width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+	font-size: 18px; font-weight: 800; margin-bottom: 12px;
+	background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+}
+.modal-card.danger .modal-icon { background: color-mix(in srgb, #e5484d 16%, transparent); color: #ff6b70; }
+.modal-card h3 { margin: 0 0 6px; font-size: 16px; }
+.modal-card p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.modal-actions .btn { min-width: 96px; }

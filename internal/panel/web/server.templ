@@ -22,7 +22,7 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 		</div>
 
 		<div class="card">
-			<h2>Actions</h2>
+			<h2>Controls</h2>
 			<p class="sub">Applied instantly via the agent (RCON / systemd)</p>
 			if v.IsAdmin {
 				<div class="btn-row">
@@ -39,17 +39,19 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 						</form>
 					}
 				</div>
-				<h2 class="mt14">Change map</h2>
-				<form method="post" action="/do/map" class="row">
-					<select name="map" style="flex:1">
-						for _, m := range v.Maps {
-							<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
-						}
-					</select>
-					<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
-				</form>
-			} else {
-				<p class="muted mt0">You can watch the live server state here. Restarts and map changes are handled by admins.</p>
+				<hr class="divider"/>
+			}
+			<p class="sub-label">Change map</p>
+			<form method="post" action="/do/map" class="row">
+				<select name="map" style="flex:1">
+					for _, m := range v.Maps {
+						<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
+					}
+				</select>
+				<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
+			</form>
+			if !v.IsAdmin {
+				<p class="hint mt14">Anyone can switch the map — restarts and lifecycle controls are handled by admins.</p>
 			}
 		</div>
 	</div>
