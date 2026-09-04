@@ -85,9 +85,10 @@ func (c *AgentClient) Health(ctx context.Context) error {
 // ServerStatus mirrors the agent's FullStatus payload.
 type ServerStatus struct {
 	Service struct {
-		Active  bool   `json:"active"`
-		Sub     string `json:"sub"`
-		Enabled bool   `json:"enabled"`
+		Active        bool    `json:"active"`
+		Sub           string  `json:"sub"`
+		Enabled       bool    `json:"enabled"`
+		UptimeSeconds float64 `json:"uptime_seconds"`
 	} `json:"service"`
 	Info *struct {
 		Name    string `json:"name"`
@@ -243,18 +244,65 @@ func (c *AgentClient) PutWhitelist(ctx context.Context, ids []string) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/whitelist", map[string]any{"steamids": ids}, nil)
 }
 
+// PlayerLoadout is the agent-side loadout for one steamid.
+type PlayerLoadout struct {
+	KnifeT      string `json:"knife_t"`
+	KnifeCT     string `json:"knife_ct"`
+	SyncEnabled bool   `json:"-"`
+}
+
 // GetLoadout fetches a player's loadout from the agent store.
-func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (json.RawMessage, error) {
+func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (*PlayerLoadout, error) {
 	var out struct {
-		Loadout json.RawMessage `json:"loadout"`
+		Loadout struct {
+			KnifeT  string `json:"knife_t"`
+			KnifeCT string `json:"knife_ct"`
+		} `json:"loadout"`
+		SyncEnabled bool `json:"sync_enabled"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/api/v1/loadout/"+steamid, nil, &out); err != nil {
 		return nil, err
 	}
-	return out.Loadout, nil
+	return &PlayerLoadout{KnifeT: out.Loadout.KnifeT, KnifeCT: out.Loadout.KnifeCT, SyncEnabled: out.SyncEnabled}, nil
 }
 
-// PutLoadout pushes a player's loadout to the agent (syncs to WeaponPaints).
-func (c *AgentClient) PutLoadout(ctx context.Context, steamid string, loadout any) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/loadout/"+steamid, map[string]any{"loadout": loadout}, nil)
+// PutLoadout pushes a player's knife selection to the agent (which syncs to
+// WeaponPaints' MySQL when configured).
+func (c *AgentClient) PutLoadout(ctx context.Context, steamid, knifeT, knifeCT string) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/loadout/"+steamid,
+		map[string]any{"loadout": map[string]any{"knife_t": knifeT, "knife_ct": knifeCT}}, nil)
+}
+
+// PluginConfig fetches a plugin's config JSON (pretty-printed).
+// Returns nil bytes when the file does not exist yet.
+func (c *AgentClient) PluginConfig(ctx context.Context, id string) ([]byte, error) {
+	var out struct {
+		Exists bool            `json:"exists"`
+		JSON   json.RawMessage `json:"json"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/plugins/"+id+"/config", nil, &out); err != nil {
+		return nil, err
+	}
+	if !out.Exists || len(out.JSON) == 0 {
+		return nil, nil
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, out.JSON, "", "  "); err != nil {
+		return out.JSON, nil
+	}
+	return buf.Bytes(), nil
+}
+
+// SavePluginConfig validates and saves a plugin config JSON.
+func (c *AgentClient) SavePluginConfig(ctx context.Context, id, jsonBody string) error {
+	var doc any
+	dec := json.NewDecoder(strings.NewReader(jsonBody))
+	if err := dec.Decode(&doc); err != nil {
+		return fmt.Errorf("config is not valid JSON: %w", err)
+	}
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		return fmt.Errorf("config must be a JSON object")
+	}
+	return c.do(ctx, http.MethodPut, "/api/v1/plugins/"+id+"/config", map[string]any{"json": obj}, nil)
 }

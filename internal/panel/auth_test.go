@@ -78,7 +78,7 @@ func TestAgentClientPaths(t *testing.T) {
 					w.Write([]byte(`{"steamids":[]}`))
 				}
 			case "/api/v1/loadout/76561197961500295":
-				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit"}}`))
+				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit","knife_ct":"weapon_bayonet"},"sync_enabled":true}`))
 			case "/api/v1/broken":
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(`{"error":"boom"}`))
@@ -144,12 +144,12 @@ func TestAgentClientPaths(t *testing.T) {
 	}
 
 	// loadout round trip
-	if err := c.PutLoadout(ctx, "76561197961500295", map[string]string{"knife_t": "weapon_knife_karambit"}); err != nil {
+	if err := c.PutLoadout(ctx, "76561197961500295", "weapon_knife_karambit", "weapon_bayonet"); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := c.GetLoadout(ctx, "76561197961500295")
-	if err != nil || !strings.Contains(string(raw), "karambit") {
-		t.Fatalf("loadout = %s %v", raw, err)
+	lo, err := c.GetLoadout(ctx, "76561197961500295")
+	if err != nil || lo.KnifeT != "weapon_knife_karambit" || lo.KnifeCT != "weapon_bayonet" {
+		t.Fatalf("loadout = %+v %v", lo, err)
 	}
 
 	// password / settings / changemap

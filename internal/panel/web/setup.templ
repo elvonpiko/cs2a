@@ -1,0 +1,37 @@
+package web
+
+// Setup is the first-run admin creation page.
+templ Setup(showError bool, errMsg string) {
+	<div class="login-wrap">
+		<div class="login-blob b1"></div>
+		<div class="login-blob b2"></div>
+		<div class="login-card">
+			<div class="logo-big">C</div>
+			<h1>Welcome to cs2a</h1>
+			<p class="sub">Create the first admin account</p>
+			if showError {
+				<div class="error-box">{ errMsg }</div>
+			}
+			<form method="post" action="/setup">
+				<label class="field">
+					<span>Setup token (printed by the installer)</span>
+					<input type="password" name="token" autocomplete="off" required/>
+				</label>
+				<label class="field">
+					<span>Admin username</span>
+					<input type="text" name="username" autofocus required minlength="2" maxlength="32"/>
+				</label>
+				<label class="field">
+					<span>Password (min 8 chars)</span>
+					<input type="password" name="password" required minlength="8" maxlength="128"/>
+				</label>
+				<label class="field">
+					<span>Your SteamID (optional)</span>
+					<input type="text" name="steamid" placeholder="[U:1:1234567] or SteamID64"/>
+				</label>
+				<button class="btn primary" type="submit">Create admin</button>
+			</form>
+			<p class="login-foot">This page disappears once the first admin exists.</p>
+		</div>
+	</div>
+}
