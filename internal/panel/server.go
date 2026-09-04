@@ -40,6 +40,11 @@ func userFromCtx(r *http.Request) *User {
 
 const sessionCookie = "cs2a_session"
 
+// ServeHTTP lets *Server be used directly as an http.Handler.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.Handler().ServeHTTP(w, r)
+}
+
 // Handler builds the panel's http.Handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -57,7 +62,7 @@ func (s *Server) Handler() http.Handler {
 	// pages
 	mux.HandleFunc("GET /{$}", s.auth(s.handleServerPage))
 	mux.HandleFunc("GET /partials/status-card", s.auth(s.handleStatusCardPartial))
-	mux.HandleFunc("GET /plugins", s.auth(s.handlePluginsPage))
+	mux.HandleFunc("GET /plugins", s.admin(s.handlePluginsPage))
 	mux.HandleFunc("GET /plugins/{id}/config", s.admin(s.handlePluginConfigPage))
 	mux.HandleFunc("POST /plugins/{id}/config", s.admin(s.handlePluginConfigPost))
 	mux.HandleFunc("POST /plugins/{id}/install", s.admin(s.handlePluginInstall))
