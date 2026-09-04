@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -60,19 +61,41 @@ func TestExtractZipBasic(t *testing.T) {
 	}
 }
 
-func TestExtractZipSlipRejected(t *testing.T) {
+func TestExtractZipSlipContainment(t *testing.T) {
 	zipBytes, err := makeZip(map[string][]byte{
-		"../evil.txt": {1},
+		"../evil.txt":   {1},
+		"/absolute.txt": {2},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	if _, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest); err != ErrUnsafePath {
-		t.Fatalf("want ErrUnsafePath, got %v", err)
+	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	// entries with traversal/absolute components must resolve INSIDE dest
+	if _, err := os.Stat(filepath.Join(dest, "evil.txt")); err != nil {
+		t.Fatalf("evil.txt not contained in dest: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "absolute.txt")); err != nil {
+		t.Fatalf("absolute.txt not contained in dest: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "..", "evil.txt")); err == nil {
 		t.Fatal("file escaped target dir")
+	}
+	if len(tops) != 2 || tops[0] != "absolute.txt" || tops[1] != "evil.txt" {
+		t.Fatalf("tops = %v", tops)
+	}
+}
+
+func TestExtractZipNulNameRejected(t *testing.T) {
+	zipBytes, err := makeZip(map[string][]byte{"bad\x00name.txt": {1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), t.TempDir()); !errors.Is(err, ErrUnsafePath) {
+		t.Fatalf("want ErrUnsafePath, got %v", err)
 	}
 }
 

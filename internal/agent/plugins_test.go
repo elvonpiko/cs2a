@@ -17,13 +17,14 @@ import (
 // fakeGH serves GitHub-API-like release metadata and a downloadable asset.
 func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 	t.Helper()
+	base := ""
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/roflmuffin/CounterStrikeSharp/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(GHRelease{
 			TagName: "v100.0.0",
 			Assets: []GHAsset{
-				{Name: "CounterStrikeSharp-Site-Windows.zip", URL: "/assets/cssharp-site.zip"},
-				{Name: "CounterStrikeSharp-with-runtime-linux-x64.zip", URL: "/assets/cssharp-runtime.zip"},
+				{Name: "CounterStrikeSharp-Site-Windows.zip", URL: base + "/assets/cssharp-site.zip"},
+				{Name: "CounterStrikeSharp-with-runtime-linux-x64.zip", URL: base + "/assets/cssharp-runtime.zip"},
 			},
 		})
 	})
@@ -31,7 +32,7 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		json.NewEncoder(w).Encode(GHRelease{
 			TagName: "v1.5.4",
 			Assets: []GHAsset{
-				{Name: "WeaponPaints-1.5.4.zip", URL: "/assets/wp.zip"},
+				{Name: "WeaponPaints-1.5.4.zip", URL: base + "/assets/wp.zip"},
 			},
 		})
 	})
@@ -63,6 +64,7 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		w.Write(zipBytes)
 	})
 	srv := httptest.NewServer(mux)
+	base = srv.URL // handlers capture by reference
 	gh := NewGHClient("")
 	// point the client at the fake server by rewriting api URLs
 	gh.HTTP.Transport = rewriteTransport{base: http.DefaultTransport, to: srv.URL}
@@ -104,6 +106,14 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 	}
 	defer store.Close()
 	in := NewInstaller(cfg, store, DefaultCatalog(), gh)
+
+	// cssharp->metamod post-install patches gameinfo.gi; it must exist
+	if err := os.MkdirAll(cfg.CFGDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.CSGODir(), "gameinfo.gi"), []byte("Game\tcsgo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := in.Install(context.Background(), "weaponpaints", false)
 	if err != nil {
