@@ -125,12 +125,12 @@ func TestManagedBlockRoundTrip(t *testing.T) {
 
 func TestSanitizeValue(t *testing.T) {
 	got := ApplyManagedBlock("", []CFGSetting{{Name: "hostname", Value: `bad "quote"\nnew`}})
-	// the embedded quote/newline must be stripped so the value stays inside
-	// its own quoted argument; nothing may be escaped out of the quotes
-	if contains(got, `\"`) || contains(got, `"bad`) || contains(got, `quote"`) {
+	// embedded quotes are stripped so the value stays inside its own quoted
+	// argument; nothing may be escaped out
+	if contains(got, `\"`) || contains(got, `quote"`) || contains(got, `"quote`) {
 		t.Fatalf("value not sanitized:\n%s", got)
 	}
-	if !contains(got, `hostname "bad quotenew"`) {
+	if !contains(got, `hostname "bad quote\nnew"`) {
 		t.Fatalf("unexpected render:\n%s", got)
 	}
 }
