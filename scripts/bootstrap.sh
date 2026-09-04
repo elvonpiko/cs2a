@@ -260,7 +260,12 @@ else
   fi
   info "downloading $URL"
   TMP=$(mktemp -d)
-  curl -fL --retry 3 -o "$TMP/cs2a.tar.gz" "$URL"
+  if ! curl -fL --retry 3 -o "$TMP/cs2a.tar.gz" "$URL"; then
+    die "no prebuilt release found at $URL.
+    A release exists only after a v* tag is pushed (the release workflow builds it).
+    Either: push a tag and rerun, or build locally and place dist/cs2a-agent +
+    dist/cs2a-panel next to bootstrap.sh before running it."
+  fi
   tar -xzf "$TMP/cs2a.tar.gz" -C "$TMP"
   cp -f "$TMP"/cs2a-agent "$TMP"/cs2a-panel "$CS2A_ROOT/bin/" 2>/dev/null \
     || cp -f "$TMP"/dist/* "$CS2A_ROOT/bin/"

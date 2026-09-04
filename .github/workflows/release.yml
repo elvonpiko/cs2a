@@ -1,0 +1,45 @@
+# Builds and publishes a GitHub Release with the prebuilt linux binaries:
+#   dist/cs2a-agent, dist/cs2a-panel, packaged as cs2a-linux-amd64.tar.gz
+# Triggered on v* tags. bootstrap.sh downloads exactly that asset name.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install templ
+        run: go install github.com/a-h/templ/cmd/templ@v0.3.1020
+
+      - name: Build linux/amd64
+        run: |
+          go tool templ generate
+          CGO_ENABLED=0 VERSION="${GITHUB_REF_NAME}" make build
+
+      - name: Package
+        run: |
+          cd dist
+          tar -czf ../cs2a-linux-amd64.tar.gz cs2a-agent cs2a-panel
+          sha256sum ../cs2a-linux-amd64.tar.gz > cs2a-linux-amd64.tar.gz.sha256
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cs2a-linux-amd64.tar.gz
+            dist/cs2a-linux-amd64.tar.gz.sha256
+          generate_release_notes: true
