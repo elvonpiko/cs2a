@@ -397,6 +397,20 @@ table.tbl td.mono, .mono { font-family: var(--mono); font-size: 13px; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .modal-actions .btn { min-width: 96px; }
 
+/* --- page transitions ----------------------------------------------------- */
+/* Every full page render (tab change / login) cascades its top-level blocks
+   in with the same rise used on the login card — minimal, no per-card flicker.
+   htmx partial swaps (status card) happen below this level, so they never
+   re-trigger the entrance. */
+@keyframes pageRise {
+	from { opacity: 0; transform: translateY(12px); }
+	to { opacity: 1; transform: none; }
+}
+.shell > * { animation: pageRise .4s cubic-bezier(.2,.9,.3,1) both; }
+.shell > :nth-child(2) { animation-delay: .05s; }
+.shell > :nth-child(3) { animation-delay: .1s; }
+.shell > :nth-child(n+4) { animation-delay: .14s; }
+
 /* --- reduced motion ------------------------------------------------------ */
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
