@@ -1,7 +1,12 @@
-# Package `internal/version`
+// Package version holds the build version string, injected at link time by
+// the Makefile (-X cs2a/internal/version.Version=...).
+package version
 
-Holds the build version string injected at link time by the Makefile
-(`-X cs2a/internal/version.Version=...`).
+// Version is overridden at build time with -ldflags "-X ...". Falls back to
+// "dev" for untagged local builds.
+var Version = "dev"
 
-`Version` defaults to `dev` so that locally built binaries report something
-meaningful, and tests can assert against a known constant.
+// UserAgent is used by the agent when talking to external services.
+func UserAgent() string {
+	return "cs2a/" + Version
+}
