@@ -51,6 +51,11 @@ func (f *fakeService) IsEnabled() (bool, error) {
 	defer f.mu.Unlock()
 	return f.enabled, nil
 }
+func (f *fakeService) UptimeSeconds() (float64, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return 3600, f.active
+}
 
 // fakeRCON is a minimal RCON server that records executed commands.
 type fakeRCON struct {
