@@ -1,0 +1,36 @@
+# --- build artifacts -------------------------------------------------
+/dist/
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+
+# --- generated code (templ) -----------------------------------------
+**/*_templ.go
+
+# --- runtime data & secrets (never commit) ---------------------------
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+*.local.json
+/etc/
+
+# --- go --------------------------------------------------------------
+/vendor/
+
+# --- editors / OS ----------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# --- plugin (C#) build output ----------------------------------------
+plugin/**/bin/
+plugin/**/obj/
+
+# --- node (none expected, just in case) ------------------------------
+node_modules/
