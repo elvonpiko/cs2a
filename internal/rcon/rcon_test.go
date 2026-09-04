@@ -108,6 +108,18 @@ func (s *fakeServer) serveConn(conn net.Conn) {
 
 func (s *fakeServer) write(conn net.Conn, id, typ int32, body string) {
 	s.t.Helper()
+	// Real servers split large responses into ~4096-byte packets; do the same
+	// so the client's reassembly logic is exercised.
+	const chunk = 4096
+	for len(body) > chunk {
+		s.writePacket(conn, id, typ, body[:chunk])
+		body = body[chunk:]
+	}
+	s.writePacket(conn, id, typ, body)
+}
+
+func (s *fakeServer) writePacket(conn net.Conn, id, typ int32, body string) {
+	s.t.Helper()
 	size := 4 + 4 + len(body) + 2
 	buf := make([]byte, 4+size)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
