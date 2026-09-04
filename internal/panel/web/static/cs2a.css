@@ -202,7 +202,7 @@ table.tbl td.mono, .mono { font-family: var(--mono); font-size: 13px; }
 
 /* --- plugin cards ---------------------------------------------------- */
 
-.plugin-card { display: flex; flex-direction: column; gap: 10px; }
+.plugin-card { display: flex; flex-direction: column; gap: 10px; height: 100%; }
 .plugin-card .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .plugin-card h3 { margin: 0; font-size: 15px; font-weight: 650; }
 .plugin-card .byline { color: var(--faint); font-size: 12px; }
@@ -267,16 +267,6 @@ table.tbl td.mono, .mono { font-family: var(--mono); font-size: 13px; }
 	font-size: 13.5px; margin-bottom: 14px;
 }
 
-dialog {
-	background: var(--surface); color: var(--text);
-	border: 1px solid var(--border-strong);
-	border-radius: var(--radius); padding: 22px; max-width: 440px;
-	box-shadow: var(--shadow);
-}
-dialog::backdrop { background: rgba(4, 6, 10, 0.6); backdrop-filter: blur(3px); }
-dialog h3 { margin: 0 0 8px; font-size: 16px; }
-dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
-
 .section-gap { margin-top: 22px; }
 .row { display: flex; align-items: center; gap: 10px; }
 .row.between { justify-content: space-between; }
@@ -324,12 +314,12 @@ dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 .item-card {
 	position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px;
 	width: 108px; padding: 8px 6px; border: 1px solid var(--border); border-radius: 10px;
-	cursor: pointer; background: color-mix(in srgb, var(--card) 70%, transparent);
+	cursor: pointer; background: var(--surface-2);
 	transition: border-color .15s ease, transform .15s ease, background .15s ease;
 }
 .item-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .item-card input { position: absolute; opacity: 0; pointer-events: none; }
-.item-card.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+.item-card.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); }
 .item-card.selected::after {
 	content: "✓"; position: absolute; top: 4px; right: 6px; font-size: 11px; font-weight: 800;
 	color: var(--accent);
@@ -353,8 +343,28 @@ dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 	background: rgba(8, 10, 16, .72); font-size: 12px; font-weight: 600; letter-spacing: .04em;
 }
 
-/* --- layout balance: cards keep natural height in grids ---------------- */
-.grid { align-items: start; }
+/* --- card internals: stretch + pinned footers --------------------------- */
+/* Cards are flex columns: content flows from the top, .card-foot pins to the
+   bottom, and .grow sections absorb spare space. Side-by-side cards in a grid
+   therefore share one clean height with aligned content. */
+.card { display: flex; flex-direction: column; }
+.card > * { flex: none; }
+.card .grow { flex: 1 1 auto; }
+.card-foot { margin-top: auto; padding-top: 14px; }
+.card-foot .hint { margin-top: 0; }
+
+/* --- scrollable regions + empty states ----------------------------------- */
+.scroll-y { overflow-y: auto; max-height: 300px; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--surface-2) transparent; }
+.scroll-y::-webkit-scrollbar, .lo-row::-webkit-scrollbar { width: 8px; }
+.scroll-y::-webkit-scrollbar-thumb, .lo-row::-webkit-scrollbar-thumb { background: var(--surface-2); border-radius: 999px; }
+.scroll-y::-webkit-scrollbar-track, .lo-row::-webkit-scrollbar-track { background: transparent; }
+.empty {
+	display: flex; flex-direction: column; align-items: center; justify-content: center;
+	gap: 6px; text-align: center; color: var(--faint); font-size: 13px;
+	padding: 26px 16px; border: 1px dashed var(--border); border-radius: var(--radius-sm);
+	background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+}
+.empty .glyph { font-size: 20px; opacity: .8; }
 
 /* --- card section divider ----------------------------------------------- */
 .card .divider { border: 0; border-top: 1px dashed var(--border); margin: 16px 0; }
@@ -370,7 +380,7 @@ dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 	animation: fadeIn .16s ease both;
 }
 .modal-card {
-	width: min(420px, calc(100vw - 40px)); background: var(--card); border: 1px solid var(--border);
+	width: min(420px, calc(100vw - 40px)); background: var(--surface); border: 1px solid var(--border);
 	border-radius: 16px; padding: 22px; box-shadow: 0 24px 70px rgba(0,0,0,.5);
 	animation: modalRise .22s cubic-bezier(.2,.9,.3,1) both;
 }
@@ -386,3 +396,8 @@ dialog p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
 .modal-card p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .modal-actions .btn { min-width: 96px; }
+
+/* --- reduced motion ------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+	*, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

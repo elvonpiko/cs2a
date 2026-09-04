@@ -50,9 +50,13 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 				</select>
 				<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
 			</form>
-			if !v.IsAdmin {
-				<p class="hint mt14">Anyone can switch the map — restarts and lifecycle controls are handled by admins.</p>
-			}
+			<div class="card-foot">
+				if v.IsAdmin {
+					<p class="hint">Every action runs through the agent and lands in the audit trail.</p>
+				} else {
+					<p class="hint">Anyone can switch the map — restarts and lifecycle controls are handled by admins.</p>
+				}
+			</div>
 		</div>
 	</div>
 
@@ -61,9 +65,12 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 			<h2>Online players</h2>
 			<p class="sub">Live from RCON status</p>
 			if len(v.PlayerList) == 0 {
-				<p class="muted">Nobody is connected right now.</p>
+				<div class="empty grow">
+					<span class="glyph">◎</span>
+					<span>Nobody is connected right now</span>
+				</div>
 			} else {
-				<div>
+				<div class="grow scroll-y">
 					for _, p := range v.PlayerList {
 						<div class="player-pill">
 							<div>
@@ -82,15 +89,22 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 					}
 				</div>
 			}
+			<div class="card-foot">
+				<p class="hint">Counts include bots. Player list refreshes with the status card.</p>
+			</div>
 		</div>
 
 		<div class="card">
 			<h2>Connection</h2>
 			<p class="sub">Give this to your friends</p>
-			<div class="kv"><span class="k">Server</span><span class="v mono">{ v.Hostname }</span></div>
-			<div class="kv"><span class="k">Current map</span><span class="v mono">{ v.Map }</span></div>
-			<div class="kv"><span class="k">Slots</span><span class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</span></div>
-			<div class="kv"><span class="k">Panel</span><span class="v mono">cs2a { v.PanelVersion }</span></div>
+			<div class="grow">
+				<div class="kv"><span class="k">Server</span><span class="v mono">{ v.Hostname }</span></div>
+				<div class="kv"><span class="k">Slots</span><span class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</span></div>
+				<div class="kv"><span class="k">Panel</span><span class="v mono">cs2a { v.PanelVersion }</span></div>
+			</div>
+			<div class="card-foot">
+				<p class="hint">Friends join via the game server address — the server password (Access page) keeps it private when set.</p>
+			</div>
 		</div>
 	</div>
 }

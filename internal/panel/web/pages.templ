@@ -28,15 +28,17 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 			if v.Password != "" {
 				<div class="kv"><span class="k">Current password</span><span class="v mono">{ v.Password }</span></div>
 			}
-			<form method="post" action="/access/password" class="mt14">
+			<form method="post" action="/access/password" class="mt14 grow">
 				<label class="field">
 					<span>New password</span>
 					<input type="text" name="password" value={ v.Password } placeholder="empty = no password" autocomplete="off"/>
 				</label>
-				<div class="btn-row">
-					<button class="btn primary" type="submit">Set password</button>
+				<div class="card-foot">
+					<div class="btn-row">
+						<button class="btn primary" type="submit">Set password</button>
+					</div>
+					<p class="hint" style="margin-top:8px">Setting a password stops random players from joining. Clear it to make the server public again.</p>
 				</div>
-				<p class="hint">Setting a password stops random players from joining. Clear it to make the server public again.</p>
 			</form>
 		</div>
 
@@ -50,16 +52,18 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				}
 				{' '}requires the CS2 Whitelist plugin; empty list = open server
 			</p>
-			<form method="post" action="/access/whitelist">
+			<form method="post" action="/access/whitelist" class="grow">
 				<label class="field">
 					<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
-					<textarea name="steamids" rows="9" class="mono" spellcheck="false">{ v.WhitelistText }</textarea>
+					<textarea name="steamids" rows="9" class="mono" spellcheck="false" style="min-height:220px">{ v.WhitelistText }</textarea>
 				</label>
-				<div class="btn-row">
-					<button class="btn primary" type="submit">Save whitelist</button>
-					<a class="btn ghost" href="/users">Pick from panel users</a>
+				<div class="card-foot">
+					<div class="btn-row">
+						<button class="btn primary" type="submit">Save whitelist</button>
+						<a class="btn ghost" href="/users">Pick from panel users</a>
+					</div>
+					<p class="hint" style="margin-top:8px">Entries are normalized to SteamID64. Players linked in the panel appear here with one click.</p>
 				</div>
-				<p class="hint">Entries are normalized to SteamID64. Players linked in the panel appear here with one click.</p>
 			</form>
 		</div>
 	</div>
@@ -67,6 +71,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 	<div class="card section-gap">
 		<h2>Panel users</h2>
 		<p class="sub">Accounts that can sign into this panel</p>
+		<div class="scroll-y">
 		<table class="tbl">
 			<thead>
 				<tr><th>User</th><th>Role</th><th>SteamID64</th><th></th></tr>
@@ -95,6 +100,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				}
 			</tbody>
 		</table>
+		</div>
 	</div>
 }
 
@@ -116,7 +122,7 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 		<div class="card">
 			<h2>Create account</h2>
 			<p class="sub">Admins manage the server; players get the player view</p>
-			<form method="post" action="/users/create">
+			<form method="post" action="/users/create" class="grow">
 				<label class="field"><span>Username</span><input type="text" name="username" required minlength="2" maxlength="32"/></label>
 				<label class="field"><span>Password (min 8 chars)</span><input type="password" name="password" required minlength="8" maxlength="128"/></label>
 				<label class="field">
@@ -127,7 +133,9 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 					</select>
 				</label>
 				<label class="field"><span>SteamID (optional — SteamID64, [U:1:x] or STEAM_1:y:z)</span><input type="text" name="steamid" placeholder="[U:1:1234567]"/></label>
-				<button class="btn primary" type="submit">Create user</button>
+				<div class="card-foot">
+					<button class="btn primary" type="submit">Create user</button>
+				</div>
 			</form>
 		</div>
 

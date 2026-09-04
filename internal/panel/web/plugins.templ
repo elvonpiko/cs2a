@@ -79,16 +79,18 @@ templ PluginConfigPage(nav *NavUser, toast *Toast, v PluginConfigView) {
 		if v.Note != "" {
 			<p class="faint">{ v.Note }</p>
 		}
-		<form method="post" action={ "/plugins/" + v.ID + "/config" }>
+		<form method="post" action={ "/plugins/" + v.ID + "/config" } class="grow">
 			<label class="field">
 				<span>config.json</span>
 				<textarea name="json" rows="20" class="mono" spellcheck="false">{ v.JSON }</textarea>
 			</label>
-			<div class="btn-row">
-				<button class="btn primary" type="submit">Save config</button>
-				<a class="btn ghost" href="/plugins">Back</a>
+			<div class="card-foot">
+				<div class="btn-row">
+					<button class="btn primary" type="submit">Save config</button>
+					<a class="btn ghost" href="/plugins">Back</a>
+				</div>
+				<p class="hint" style="margin-top:8px">Some plugins only read their config at server start — a restart may be required after saving.</p>
 			</div>
-			<p class="hint">Some plugins only read their config at server start — a restart may be required after saving.</p>
 		</form>
 	</div>
 }
