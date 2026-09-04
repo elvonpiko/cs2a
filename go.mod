@@ -1,6 +1,6 @@
 module cs2a
 
-go 1.26
+go 1.26.0
 
 toolchain go1.26.3
 
@@ -9,7 +9,10 @@ tool (
 	golang.org/x/tools/cmd/stringer
 )
 
-require modernc.org/sqlite v1.58.0
+require (
+	golang.org/x/crypto v0.56.0
+	modernc.org/sqlite v1.58.0
+)
 
 require (
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
