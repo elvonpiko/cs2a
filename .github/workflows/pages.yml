@@ -1,0 +1,49 @@
+# Publishes the cs2a install path to GitHub Pages on every release tag:
+#   https://elvonpiko.github.io/cs2a/            -> landing page
+#   https://elvonpiko.github.io/cs2a/install.sh  -> curl | sudo bash target
+#   https://elvonpiko.github.io/cs2a/bootstrap.sh -> the installer itself
+name: pages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          mkdir -p public
+          cp site/index.html public/
+          cp scripts/install.sh public/
+          cp scripts/bootstrap.sh public/
+          # serve shell scripts with a plain text content type (harmless, but tidy)
+          printf 'install.sh application/octet-stream\nbootstrap.sh application/octet-stream\n' > public/.htaccess || true
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

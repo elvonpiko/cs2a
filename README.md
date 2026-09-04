@@ -68,12 +68,31 @@ make build             # dist/cs2a-agent + dist/cs2a-panel
 
 ## Install
 
-On a fresh Ubuntu/Debian VPS as root:
+On a fresh Ubuntu/Debian VPS as root — one command:
+
+```sh
+curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo bash
+```
+
+Works straight after the first push too, straight from the repo (no Pages needed):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/elvonpiko/cs2a/main/scripts/bootstrap.sh -o bootstrap.sh
 sudo bash bootstrap.sh
 ```
+
+The `install.sh` wrapper re-attaches your terminal (so the interactive TUI works
+under `curl | bash`), installs from the latest release tag by default, and
+supports pinning for repeatable setups:
+
+```sh
+curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo CS2A_VERSION=v0.1.0 bash
+```
+
+The landing page + wrapper + installer are published to GitHub Pages
+automatically by `.github/workflows/pages.yml` on every `v*` tag — no domain
+required (the `elvonpiko.github.io` subdomain is HTTPS out of the box; a custom
+domain is optional later).
 
 The interactive installer sets up SteamCMD + the CS2 server (~40GB), writes
 systemd units (`cs2-server`, `cs2a-agent`, `cs2a-panel`), opens the firewall

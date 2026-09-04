@@ -51,6 +51,12 @@ check "game port is asked"         grep -q 'Game port (A2S + RCON' scripts/boots
 check "detects existing install"   grep -q 'detect_existing' scripts/bootstrap.sh
 check "parses rcon from cfg"       grep -q 'rcon_password' scripts/bootstrap.sh
 check "reuse mode default on detect" grep -q 'DETECTED_OK=1' scripts/bootstrap.sh
+check "install wrapper exists"     test -x scripts/install.sh
+check "wrapper re-attaches tty"    grep -q '/dev/tty' scripts/install.sh
+check "wrapper pins version"       grep -q 'CS2A_VERSION' scripts/install.sh
+check "wrapper unattended fallback" grep -q -- '--unattended' scripts/install.sh
+check "pages workflow ships site"  grep -q 'deploy-pages' .github/workflows/pages.yml
+check "landing page has copy btn"  grep -q 'copy' site/index.html
 
 echo
 echo "== go-side plan package =="

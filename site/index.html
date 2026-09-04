@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>cs2a — minimal CS2 server manager</title>
+<meta name="description" content="One command to run a Counter-Strike 2 server with a clean web panel: status, maps, plugins, whitelist and per-player loadouts."/>
+<style>
+	:root {
+		--bg: #0b0e14; --surface: #141926; --surface2: #1a2032;
+		--border: rgba(255,255,255,.08); --text: #e8ebf2; --muted: #8b93a7;
+		--accent: #ff7a45; --accent-soft: rgba(255,122,69,.14); --green: #4ade80;
+	}
+	* { box-sizing: border-box; }
+	html { color-scheme: dark; }
+	body {
+		margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+		background: var(--bg); color: var(--text); line-height: 1.55;
+		font: 15px -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+		-webkit-font-smoothing: antialiased;
+	}
+	.b1, .b2 { position: fixed; border-radius: 50%; filter: blur(90px); opacity: .3; pointer-events: none; }
+	.b1 { width: 480px; height: 480px; background: var(--accent); top: -140px; right: -100px; }
+	.b2 { width: 420px; height: 420px; background: #3b5bdb; bottom: -160px; left: -120px; }
+	.card {
+		position: relative; width: 620px; max-width: 100%;
+		background: rgba(20,25,38,.88); backdrop-filter: blur(18px);
+		border: 1px solid rgba(255,255,255,.14); border-radius: 18px; padding: 40px 38px;
+		box-shadow: 0 30px 80px rgba(0,0,0,.5);
+		animation: rise .55s cubic-bezier(.2,.9,.3,1) both;
+	}
+	@keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
+	.logo {
+		width: 46px; height: 46px; border-radius: 13px; margin-bottom: 16px;
+		background: linear-gradient(135deg, var(--accent), #ffb56b);
+		display: grid; place-items: center; color: #1a1207; font-size: 21px; font-weight: 800;
+		box-shadow: 0 0 26px rgba(255,122,69,.45);
+	}
+	h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.3px; }
+	.sub { margin: 0 0 26px; color: var(--muted); font-size: 14.5px; }
+	.install {
+		display: flex; align-items: center; gap: 10px;
+		background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+		font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; white-space: nowrap;
+	}
+	.install .p { color: var(--accent); user-select: none; }
+	.copy {
+		margin-left: auto; flex: none; cursor: pointer; border: 1px solid var(--border);
+		background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 10px;
+		font: 600 12px inherit; transition: color .15s, border-color .15s;
+	}
+	.copy:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
+	.copy.done { color: var(--green); border-color: rgba(74,222,128,.4); }
+	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 26px; }
+	@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+	.feat { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
+	.feat b { display: block; font-size: 13.5px; }
+	.feat span { color: var(--muted); font-size: 12.5px; }
+	.foot { margin-top: 26px; color: #5b6377; font-size: 12.5px; }
+	.foot a { color: var(--accent); text-decoration: none; }
+	.foot a:hover { text-decoration: underline; }
+	code { font: 12.5px ui-monospace, Menlo, monospace; background: var(--surface2); border-radius: 6px; padding: 2px 6px; }
+</style>
+</head>
+<body>
+<div class="b1"></div><div class="b2"></div>
+<main class="card">
+	<div class="logo">C</div>
+	<h1>cs2a</h1>
+	<p class="sub">A super minimal, lightweight CS2 server manager — web panel + agent for your existing VPS. One command, interactive setup, done.</p>
+	<div class="install">
+		<span class="p">$</span>
+		<span id="cmd">curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo bash</span>
+		<button class="copy" id="copy" type="button">copy</button>
+	</div>
+	<div class="grid">
+		<div class="feat"><b>Adopts your server</b><span>Detects the existing CS2 install, unit and server.cfg — nothing clobbered.</span></div>
+		<div class="feat"><b>Full cosmetics</b><span>Knives, gloves and agents per player — synced like the official loadout.</span></div>
+		<div class="feat"><b>Plugin catalog</b><span>Metamod, CounterStrikeSharp, WeaponPaints, whitelist — one click each.</span></div>
+		<div class="feat"><b>Stays light</b><span>Two small Go binaries, SQLite, no containers, no bloat.</span></div>
+	</div>
+	<p class="foot">
+		Interactive TUI on first run (CasaOS-style). Also available pinned:
+		<code>sudo CS2A_VERSION=v0.1.0 bash</code> after the pipe. Source on
+		<a href="https://github.com/elvonpiko/cs2a">GitHub</a>.
+	</p>
+</main>
+<script>
+	var b = document.getElementById("copy"), t = document.getElementById("cmd");
+	b.addEventListener("click", function () {
+		navigator.clipboard.writeText(t.textContent).then(function () {
+			b.textContent = "copied"; b.classList.add("done");
+			setTimeout(function () { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
+		});
+	});
+</script>
+</body>
+</html>
