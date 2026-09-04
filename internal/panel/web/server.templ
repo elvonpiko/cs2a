@@ -1,0 +1,141 @@
+package web
+
+// ServerPage renders the server overview + actions.
+// Admins get lifecycle actions and map change; players get a read-only view.
+templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
+	<div class="page-head">
+		<h1>Server</h1>
+		<p>Live view of your CS2 server. Status refreshes automatically every few seconds.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice" id="flash">{ toast.Message }</div>
+		} else {
+			<div class="error-box" id="flash">{ toast.Message }</div>
+		}
+	}
+
+	<div class="grid cols-2">
+		<div class="card" id="status-card" hx-get="/partials/status-card" hx-trigger="every 5s" hx-swap="outerHTML">
+			@StatusCard(v)
+		</div>
+
+		<div class="card">
+			<h2>Actions</h2>
+			<p class="sub">Applied instantly via the agent (RCON / systemd)</p>
+			if v.IsAdmin {
+				<div class="btn-row">
+					if v.Online {
+						<form method="post" action="/do/restart" class="mt0">
+							<button class="btn danger" type="submit" data-confirm="Restart the CS2 server?">Restart</button>
+						</form>
+						<form method="post" action="/do/stop" class="mt0">
+							<button class="btn danger" type="submit" data-confirm="Stop the CS2 server?">Stop</button>
+						</form>
+					} else {
+						<form method="post" action="/do/start" class="mt0">
+							<button class="btn success" type="submit">Start</button>
+						</form>
+					}
+				</div>
+				<h2 class="mt14">Change map</h2>
+				<form method="post" action="/do/map" class="row">
+					<select name="map" style="flex:1">
+						for _, m := range v.Maps {
+							<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
+						}
+					</select>
+					<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
+				</form>
+			} else {
+				<p class="muted mt0">You can watch the live server state here. Restarts and map changes are handled by admins.</p>
+			}
+		</div>
+	</div>
+
+	<div class="grid cols-2 section-gap">
+		<div class="card">
+			<h2>Online players</h2>
+			<p class="sub">Live from RCON status</p>
+			if len(v.PlayerList) == 0 {
+				<p class="muted">Nobody is connected right now.</p>
+			} else {
+				<div>
+					for _, p := range v.PlayerList {
+						<div class="player-pill">
+							<div>
+								{ p.Name }
+								if p.IsBot {
+									<span class="badge grey">BOT</span>
+								}
+							</div>
+							<div class="meta">
+								if p.SteamID != "" {
+									{ p.SteamID } · 
+								}
+								{ p.Connected } · { fmtInt(p.Ping) }ms
+							</div>
+						</div>
+					}
+				</div>
+			}
+		</div>
+
+		<div class="card">
+			<h2>Connection</h2>
+			<p class="sub">Give this to your friends</p>
+			<div class="kv"><span class="k">Server</span><span class="v mono">{ v.Hostname }</span></div>
+			<div class="kv"><span class="k">Current map</span><span class="v mono">{ v.Map }</span></div>
+			<div class="kv"><span class="k">Slots</span><span class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</span></div>
+			<div class="kv"><span class="k">Panel</span><span class="v mono">cs2a { v.PanelVersion }</span></div>
+		</div>
+	</div>
+}
+
+// StatusCard is the polled partial: the whole card is swapped in place.
+templ StatusCard(v ServerView) {
+	<div class="card" id="status-card" hx-get="/partials/status-card" hx-trigger="every 5s" hx-swap="outerHTML">
+		<h2>Status</h2>
+		<p class="sub">
+			if v.Online {
+				Running — live data via A2S/RCON
+			} else {
+				Offline
+			}
+		</p>
+		<div class="status-hero">
+			<span class={ "status-dot", templ.KV("on", v.Online), templ.KV("pulse", v.Online), templ.KV("off", !v.Online) }></span>
+			<div>
+				if v.Online {
+					<div style="font-weight:650">{ v.Hostname }</div>
+					<div class="faint mono">{ v.ServiceSub }</div>
+				} else {
+					<div style="font-weight:650">Server is stopped</div>
+					<div class="faint">Start it to accept players</div>
+				}
+			</div>
+		</div>
+		<div class="stat-grid">
+			<div class="stat">
+				<div class="k">Current map</div>
+				<div class="v mono">{ v.Map }</div>
+			</div>
+			<div class="stat">
+				<div class="k">Players</div>
+				<div class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</div>
+			</div>
+			<div class="stat">
+				<div class="k">Bots</div>
+				<div class="v">{ fmtInt(v.Bots) }</div>
+			</div>
+			<div class="stat">
+				<div class="k">Uptime</div>
+				<div class="v">{ v.UptimeLabel }</div>
+			</div>
+		</div>
+		if v.Note != "" {
+			<p class="faint mt14">query note: { v.Note }</p>
+		}
+	</div>
+}

@@ -19,11 +19,11 @@ type Store struct {
 
 // PluginState records one installed plugin/component.
 type PluginState struct {
-	Name        string            // catalog id, e.g. "metamod"
-	Version     string            // resolved release version at install time
-	Status      string            // "installed" | "failed"
-	Manifest    map[string]string // artifacts created, for uninstall
-	InstalledAt time.Time
+	Name        string            `json:"name"`     // catalog id, e.g. "metamod"
+	Version     string            `json:"version"`  // resolved release version at install time
+	Status      string            `json:"status"`   // "installed" | "failed"
+	Manifest    map[string]string `json:"manifest"` // artifacts created, for uninstall
+	InstalledAt time.Time         `json:"installed_at"`
 }
 
 // OpenStore opens (creating if needed) the agent database and runs migrations.

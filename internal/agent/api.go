@@ -10,15 +10,16 @@ import (
 // API is the agent's HTTP surface. It binds to loopback only; the panel is
 // the sole intended client, authenticating with the shared bearer token.
 type API struct {
-	cfg    Config
-	server *Server
-	wh     *Whitelist
-	inst   *Installer
+	cfg     Config
+	server  *Server
+	wh      *Whitelist
+	inst    *Installer
+	loadout *LoadoutStore
 }
 
 // NewAPI wires the HTTP API.
-func NewAPI(cfg Config, srv *Server, wh *Whitelist, inst *Installer) *API {
-	return &API{cfg: cfg, server: srv, wh: wh, inst: inst}
+func NewAPI(cfg Config, srv *Server, wh *Whitelist, inst *Installer, loadout *LoadoutStore) *API {
+	return &API{cfg: cfg, server: srv, wh: wh, inst: inst, loadout: loadout}
 }
 
 // Handler builds the agent's http.Handler.
@@ -47,6 +48,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/plugins/{id}", auth(a.handlePluginUninstall))
 	mux.HandleFunc("GET /api/v1/whitelist", auth(a.handleGetWhitelist))
 	mux.HandleFunc("PUT /api/v1/whitelist", auth(a.handlePutWhitelist))
+	mux.HandleFunc("GET /api/v1/loadout/{steamid}", auth(a.handleGetLoadout))
+	mux.HandleFunc("PUT /api/v1/loadout/{steamid}", auth(a.handlePutLoadout))
+	mux.HandleFunc("GET /api/v1/plugins/{id}/config", auth(a.handleGetPluginConfig))
+	mux.HandleFunc("PUT /api/v1/plugins/{id}/config", auth(a.handlePutPluginConfig))
 
 	return mux
 }
@@ -283,4 +288,70 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{"error": msg})
+}
+
+// --- loadout + plugin config handlers -----------------------------------
+
+func (a *API) handleGetLoadout(w http.ResponseWriter, r *http.Request) {
+	lo, err := a.loadout.Get(r.PathValue("steamid"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"loadout": lo, "sync_enabled": a.loadout.WPEnabled()})
+}
+
+func (a *API) handlePutLoadout(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Loadout Loadout `json:"loadout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if err := a.loadout.Set(r.PathValue("steamid"), req.Loadout); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *API) handleGetPluginConfig(w http.ResponseWriter, r *http.Request) {
+	raw, exists, err := a.inst.GetPluginConfig(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out := map[string]any{"exists": exists}
+	if raw == nil {
+		out["json"] = map[string]any{}
+	} else {
+		var doc any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			writeErr(w, http.StatusInternalServerError, "config is not valid json: "+err.Error())
+			return
+		}
+		out["json"] = doc
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *API) handlePutPluginConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		JSON map[string]any `json:"json"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	b, err := json.Marshal(req.JSON)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := a.inst.PutPluginConfig(r.PathValue("id"), b); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

@@ -10,11 +10,13 @@ tool (
 )
 
 require (
+	github.com/go-sql-driver/mysql v1.10.1
 	golang.org/x/crypto v0.56.0
 	modernc.org/sqlite v1.58.0
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/a-h/parse v0.0.0-20250122154542-74294addb73e // indirect
 	github.com/a-h/templ v0.3.1020 // indirect
 	github.com/andybalholm/brotli v1.1.0 // indirect

@@ -1,0 +1,28 @@
+package web
+
+templ Login(error string) {
+	<div class="login-wrap">
+		<div class="login-blob b1"></div>
+		<div class="login-blob b2"></div>
+		<div class="login-card">
+			<div class="logo-big">C</div>
+			<h1>cs2a panel</h1>
+			<p class="sub">Sign in to manage your CS2 server</p>
+			if error != "" {
+				<div class="error-box">{ error }</div>
+			}
+			<form method="post" action="/login">
+				<label class="field">
+					<span>Username</span>
+					<input type="text" name="username" autofocus autocomplete="username" required/>
+				</label>
+				<label class="field">
+					<span>Password</span>
+					<input type="password" name="password" autocomplete="current-password" required/>
+				</label>
+				<button class="btn primary" type="submit">Sign in</button>
+			</form>
+			<p class="login-foot">cs2a · lightweight CS2 server management</p>
+		</div>
+	</div>
+}

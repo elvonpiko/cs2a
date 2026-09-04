@@ -22,6 +22,7 @@ type Config struct {
 	A2SAddr      string `json:"a2s_addr"`      // 127.0.0.1:27015
 	DBPath       string `json:"db_path"`       // agent sqlite db
 	PluginCache  string `json:"plugin_cache"`  // download cache dir
+	WPDsn        string `json:"wp_dsn"`        // optional WeaponPaints MySQL DSN (loadout sync)
 }
 
 // Defaults matching the bootstrap installer.

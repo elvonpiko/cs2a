@@ -1,0 +1,69 @@
+package web
+
+// Bare is the chrome-less layout (login page).
+templ Bare(title string, content templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="dark"/>
+			<title>{ title } · cs2a</title>
+			<link rel="stylesheet" href="/static/cs2a.css"/>
+			<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23ff7a45'/><text x='16' y='22' font-size='16' text-anchor='middle' font-family='sans-serif' font-weight='bold' fill='%231a1207'>C</text></svg>"/>
+		</head>
+		<body>
+			@content
+		</body>
+	</html>
+}
+
+// Base is the main layout with topbar navigation.
+templ Base(title string, nav *NavUser, content templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="dark"/>
+			<title>{ title } · cs2a</title>
+			<link rel="stylesheet" href="/static/cs2a.css"/>
+			<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23ff7a45'/><text x='16' y='22' font-size='16' text-anchor='middle' font-family='sans-serif' font-weight='bold' fill='%231a1207'>C</text></svg>"/>
+			<script src="/static/htmx.min.js" defer></script>
+			<script src="/static/app.js" defer></script>
+		</head>
+		<body>
+			<header class="topbar">
+				<div class="topbar-inner">
+					<a class="brand" href="/"><span class="logo">C</span> cs2a</a>
+					<nav class="nav-links">
+						if nav != nil {
+							if nav.IsAdmin() {
+								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") }>Server</a>
+								<a href="/plugins" class={ "nav-js", templ.KV("active", nav.Active == "plugins") }>Plugins</a>
+								<a href="/access" class={ "nav-js", templ.KV("active", nav.Active == "access") }>Access</a>
+								<a href="/users" class={ "nav-js", templ.KV("active", nav.Active == "users") }>Users</a>
+							} else {
+								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") }>Server</a>
+								<a href="/loadout" class={ "nav-js", templ.KV("active", nav.Active == "loadout") }>Loadout</a>
+							}
+						}
+					</nav>
+					if nav != nil {
+						<div class="userchip">
+							<b>{ nav.Name }</b>
+							<span class={ "role-badge", templ.KV("admin", nav.IsAdmin()), templ.KV("player", !nav.IsAdmin()) }>{ nav.Role }</span>
+							<form method="post" action="/logout" class="mt0">
+								<button class="btn ghost sm" type="submit">Sign out</button>
+							</form>
+						</div>
+					}
+				</div>
+			</header>
+			<main class="shell">
+				@content
+			</main>
+			<div id="toast" role="status"></div>
+		</body>
+	</html>
+}

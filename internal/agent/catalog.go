@@ -30,6 +30,9 @@ type CatalogEntry struct {
 	PostInstall []string `json:"post_install,omitempty"`
 	// Homepage for the UI "docs" link.
 	Homepage string `json:"homepage,omitempty"`
+	// ConfigPath is the cssharp config file (relative to configs/) that the
+	// panel may edit, if any.
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 // DefaultCatalog is the shipped MVP catalog. Entries are resolved at install
@@ -68,6 +71,7 @@ func DefaultCatalog() []CatalogEntry {
 			AssetRegex:  `(?i)weaponpaints.*\.zip`,
 			PostInstall: []string{"guidelines-off"},
 			Homepage:    "https://github.com/Nereziel/cs2-WeaponPaints",
+			ConfigPath:  "plugins/WeaponPaints/WeaponPaints.json",
 		},
 		{
 			ID:          "cs2whitelist",
@@ -79,6 +83,7 @@ func DefaultCatalog() []CatalogEntry {
 			Repo:        "FemboyKZ/mm-cs2whitelist",
 			AssetRegex:  `(?i)whitelist.*(linux|win).*\.(zip|tar\.gz|tgz)`,
 			Homepage:    "https://github.com/jvnipers/mm-cs2whitelist",
+			ConfigPath:  "cs2whitelist/whitelist.txt",
 		},
 	}
 }

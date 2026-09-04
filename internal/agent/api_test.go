@@ -27,7 +27,9 @@ func newTestAPI(t *testing.T) (*http.Client, *fakeService, string, Config) {
 	srv := &Server{cfg: cfg, sysd: svc, store: store}
 	wh := NewWhitelist(cfg)
 	inst := NewInstaller(cfg, store, DefaultCatalog(), nil)
-	api := NewAPI(cfg, srv, wh, inst)
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, wh, inst, lo)
 
 	ts := httptest.NewServer(api.Handler())
 	t.Cleanup(ts.Close)
@@ -78,7 +80,9 @@ func TestAPIUnauthorizedWithoutToken(t *testing.T) {
 	store, _ := OpenStore(cfg.DBPath)
 	defer store.Close()
 	srv := &Server{cfg: cfg, sysd: svc, store: store}
-	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), nil))
+	lo := NewLoadoutStore(cfg, store)
+	defer lo.Close()
+	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), nil), lo)
 	ts := httptest.NewServer(api.Handler())
 	defer ts.Close()
 
@@ -201,6 +205,27 @@ func TestAPIExec(t *testing.T) {
 	resp, out := doJSON(t, client, "POST", base, "/api/v1/server/exec", map[string]any{"command": "mp_warmuptime 5"})
 	if resp.StatusCode != 200 {
 		t.Fatalf("exec: %d %v", resp.StatusCode, out)
+	}
+}
+
+func TestAPILoadoutRoundTrip(t *testing.T) {
+	client, _, base, _ := newTestAPI(t)
+	resp, out := doJSON(t, client, "PUT", base, "/api/v1/loadout/76561197961500295", map[string]any{
+		"loadout": map[string]any{"knife_t": "weapon_knife_karambit", "knife_ct": "weapon_bayonet"},
+	})
+	if resp.StatusCode != 200 {
+		t.Fatalf("put loadout: %d %v", resp.StatusCode, out)
+	}
+	resp, out = doJSON(t, client, "GET", base, "/api/v1/loadout/76561197961500295", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get loadout: %d", resp.StatusCode)
+	}
+	lo, _ := out["loadout"].(map[string]any)
+	if lo["knife_t"] != "weapon_knife_karambit" {
+		t.Fatalf("loadout = %v", out)
+	}
+	if out["sync_enabled"] != false {
+		t.Fatalf("sync should be disabled without wp_dsn")
 	}
 }
 
