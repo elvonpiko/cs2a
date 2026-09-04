@@ -34,3 +34,6 @@ plugin/**/obj/
 
 # --- node (none expected, just in case) ------------------------------
 node_modules/
+
+# --- local-only demo (validation, never tracked) ---------------------
+/demo-web/
