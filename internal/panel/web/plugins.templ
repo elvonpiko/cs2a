@@ -1,0 +1,94 @@
+package web
+
+templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView) {
+	<div class="page-head">
+		<h1>Plugins</h1>
+		<p>Install and manage server-side components. Installs are resolved against live upstream releases.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice">{ toast.Message }</div>
+		} else {
+			<div class="error-box">{ toast.Message }</div>
+		}
+	}
+
+	<div class="grid cols-3">
+		for _, e := range entries {
+			<div class="card plugin-card">
+				<div class="head">
+					<div>
+						<h3>{ e.Name }</h3>
+						<div class="byline">by { e.Author }</div>
+					</div>
+					if e.Installed {
+						<span class="badge green">installed { e.Version }</span>
+					} else {
+						<span class="badge grey">not installed</span>
+					}
+				</div>
+				<p>{ e.Description }</p>
+				if len(e.Requires) > 0 {
+					<div class="row" style="gap:6px; flex-wrap: wrap;">
+						for _, req := range e.Requires {
+							<span class="badge blue">requires { req }</span>
+						}
+					</div>
+				}
+				<div class="btn-row">
+					if e.Installed {
+						if e.HasConfig {
+							<a class="btn sm" href={ "/plugins/" + e.ID + "/config" }>Configure</a>
+						}
+						<form method="post" action={ "/plugins/" + e.ID + "/uninstall" } class="mt0">
+							<button class="btn danger sm" type="submit" data-confirm={ "Uninstall " + e.Name + "? This removes its files." }>Uninstall</button>
+						</form>
+					} else {
+						<form method="post" action={ "/plugins/" + e.ID + "/install" } class="mt0">
+							<button class="btn primary sm" type="submit" data-confirm={ "Install " + e.Name + "?" }>Install</button>
+						</form>
+					}
+					if e.Homepage != "" {
+						<a class="btn ghost sm" href={ e.Homepage } target="_blank" rel="noopener">Docs</a>
+					}
+				</div>
+			</div>
+		}
+	</div>
+}
+
+templ PluginConfigPage(nav *NavUser, toast *Toast, v PluginConfigView) {
+	<div class="page-head">
+		<h1>{ v.Name } config</h1>
+		<p>Edits the plugin's JSON config on the server (validated, atomic write).</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice">{ toast.Message }</div>
+		} else {
+			<div class="error-box">{ toast.Message }</div>
+		}
+	}
+
+	<div class="card">
+		if !v.Exists {
+			<div class="notice">Config file does not exist yet — it is created on first server start. Saving will pre-create it.</div>
+		}
+		if v.Note != "" {
+			<p class="faint">{ v.Note }</p>
+		}
+		<form method="post" action={ "/plugins/" + v.ID + "/config" }>
+			<label class="field">
+				<span>config.json</span>
+				<textarea name="json" rows="20" class="mono" spellcheck="false">{ v.JSON }</textarea>
+			</label>
+			<div class="btn-row">
+				<button class="btn primary" type="submit">Save config</button>
+				<a class="btn ghost" href="/plugins">Back</a>
+			</div>
+			<p class="hint">Some plugins only read their config at server start — a restart may be required after saving.</p>
+		</form>
+	</div>
+}

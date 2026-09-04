@@ -1,0 +1,227 @@
+package web
+
+templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
+	<div class="page-head">
+		<h1>Access</h1>
+		<p>Server password and SteamID whitelist. Changes apply live via RCON / the whitelist plugin.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice">{ toast.Message }</div>
+		} else {
+			<div class="error-box">{ toast.Message }</div>
+		}
+	}
+
+	<div class="grid cols-2">
+		<div class="card">
+			<h2>Server password</h2>
+			<p class="sub">sv_password — applied live, no restart needed</p>
+			<form method="post" action="/access/password">
+				<label class="field">
+					<span>New password</span>
+					<input type="text" name="password" value={ v.Password } placeholder="empty = no password" autocomplete="off"/>
+				</label>
+				<div class="btn-row">
+					<button class="btn primary" type="submit">Set password</button>
+				</div>
+				<p class="hint">Setting a password stops random players from joining. Clear it to make the server public again.</p>
+			</form>
+		</div>
+
+		<div class="card">
+			<h2>Whitelist</h2>
+			<p class="sub">
+				if v.WhitelistActive {
+					<span class="badge orange">enforced</span>
+				} else {
+					<span class="badge grey">inactive</span>
+				}
+				{' '}requires the CS2 Whitelist plugin; empty list = open server
+			</p>
+			<form method="post" action="/access/whitelist">
+				<label class="field">
+					<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
+					<textarea name="steamids" rows="9" class="mono" spellcheck="false">{ v.WhitelistText }</textarea>
+				</label>
+				<div class="btn-row">
+					<button class="btn primary" type="submit">Save whitelist</button>
+					<a class="btn ghost" href="/users">Pick from panel users</a>
+				</div>
+				<p class="hint">Entries are normalized to SteamID64. Players linked in the panel appear here with one click.</p>
+			</form>
+		</div>
+	</div>
+
+	<div class="card section-gap">
+		<h2>Panel users</h2>
+		<p class="sub">Accounts that can sign into this panel</p>
+		<table class="tbl">
+			<thead>
+				<tr><th>User</th><th>Role</th><th>SteamID64</th><th></th></tr>
+			</thead>
+			<tbody>
+				for _, u := range v.Users {
+					<tr>
+						<td>{ u.Username }</td>
+						<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
+						<td class="mono">
+							if u.SteamID != "" {
+								{ u.SteamID }
+							} else {
+								<span class="faint">not linked</span>
+							}
+						</td>
+						<td style="text-align:right">
+							if u.SteamID != "" {
+								<form method="post" action="/access/whitelist/add-user" class="mt0">
+									<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
+									<button class="btn sm" type="submit">Add to whitelist</button>
+								</form>
+							}
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
+	<div class="page-head">
+		<h1>Users</h1>
+		<p>Panel accounts. Players sign in to see server info and manage their loadout.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice">{ toast.Message }</div>
+		} else {
+			<div class="error-box">{ toast.Message }</div>
+		}
+	}
+
+	<div class="grid cols-2">
+		<div class="card">
+			<h2>Create account</h2>
+			<p class="sub">Admins manage the server; players get the player view</p>
+			<form method="post" action="/users/create">
+				<label class="field"><span>Username</span><input type="text" name="username" required minlength="2" maxlength="32"/></label>
+				<label class="field"><span>Password (min 8 chars)</span><input type="password" name="password" required minlength="8" maxlength="128"/></label>
+				<label class="field">
+					<span>Role</span>
+					<select name="role">
+						<option value="player">player</option>
+						<option value="admin">admin</option>
+					</select>
+				</label>
+				<label class="field"><span>SteamID (optional — SteamID64, [U:1:x] or STEAM_1:y:z)</span><input type="text" name="steamid" placeholder="[U:1:1234567]"/></label>
+				<button class="btn primary" type="submit">Create user</button>
+			</form>
+		</div>
+
+		<div class="card">
+			<h2>Accounts</h2>
+			<p class="sub">{ fmtInt(len(v.Users)) } users</p>
+			<table class="tbl">
+				<thead><tr><th>User</th><th>Role</th><th>SteamID</th><th></th></tr></thead>
+				<tbody>
+					for _, u := range v.Users {
+						<tr>
+							<td>{ u.Username }</td>
+							<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
+							<td class="mono">{ u.SteamID }</td>
+							<td style="text-align:right">
+								if u.ID != selfID {
+									<form method="post" action="/users/delete" class="mt0">
+										<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
+										<button class="btn danger sm" type="submit" data-confirm={ "Delete user " + u.Username + "?" }>Delete</button>
+									</form>
+								}
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		</div>
+	</div>
+}
+
+templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
+	<div class="page-head">
+		<h1>Loadout</h1>
+		<p>Your cosmetics for this server — applied automatically when you connect.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice">{ toast.Message }</div>
+		} else {
+			<div class="error-box">{ toast.Message }</div>
+		}
+	}
+
+	if v.SteamID == "" {
+		<div class="card">
+			<h2>Link your SteamID</h2>
+			<p class="muted">
+				An admin has not linked a SteamID to your account yet, so your loadout cannot be applied in-game.
+				Ask an admin to add your SteamID64 — you can find it on your Steam profile.
+			</p>
+		</div>
+	} else {
+		if !v.SyncEnabled {
+			<div class="notice">
+				Skins sync is not active on this server yet. An admin needs to install the
+				<b>WeaponPaints</b> plugin (Plugins page) and configure its MySQL database.
+			</div>
+		}
+		<div class="grid cols-2">
+			<div class="card">
+				<h2>Terrorist knife</h2>
+				<p class="sub">steamid <span class="mono">{ v.SteamID }</span></p>
+				<form method="post" action="/loadout">
+					<label class="field">
+						<span>Knife</span>
+						<select name="knife_t">
+							for _, k := range v.KnifeNames {
+								<option value={ k.Value } selected?={ k.Value == v.KnifeT }>{ k.Label }</option>
+							}
+						</select>
+					</label>
+					<label class="field">
+						<span>CT knife</span>
+						<select name="knife_ct">
+							for _, k := range v.KnifeNames {
+								<option value={ k.Value } selected?={ k.Value == v.KnifeCT }>{ k.Label }</option>
+							}
+						</select>
+					</label>
+					<button class="btn primary" type="submit">Save loadout</button>
+					<p class="hint">In game, type <span class="mono">!wp</span> to force a refresh if you changed it while connected.</p>
+				</form>
+			</div>
+			<div class="card">
+				<h2>How it works</h2>
+				<p class="sub">cs2a writes your choice to the server's skin database</p>
+				<div class="kv"><span class="k">SteamID</span><span class="v mono">{ v.SteamID }</span></div>
+				<div class="kv"><span class="k">T knife</span><span class="v mono">{ knifeLabel(v.KnifeT, v.KnifeNames) }</span></div>
+				<div class="kv"><span class="k">CT knife</span><span class="v mono">{ knifeLabel(v.KnifeCT, v.KnifeNames) }</span></div>
+				<div class="kv"><span class="k">Sync</span>
+					<span class="v">
+						if v.SyncEnabled {
+							<span class="badge green">active</span>
+						} else {
+							<span class="badge grey">inactive</span>
+						}
+					</span>
+				</div>
+				<p class="muted mt14">
+					Your selection is stored per SteamID64 and applied server-side when the map loads you in.
+					Cosmetics are server-side only — other players see them, your inventory does not change.
+				</p>
+			</div>
+		</div>
+	}
+}

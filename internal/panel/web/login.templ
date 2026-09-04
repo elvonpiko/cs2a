@@ -1,6 +1,6 @@
 package web
 
-templ Login(error string) {
+templ Login(errMsg string) {
 	<div class="login-wrap">
 		<div class="login-blob b1"></div>
 		<div class="login-blob b2"></div>
@@ -8,8 +8,8 @@ templ Login(error string) {
 			<div class="logo-big">C</div>
 			<h1>cs2a panel</h1>
 			<p class="sub">Sign in to manage your CS2 server</p>
-			if error != "" {
-				<div class="error-box">{ error }</div>
+			if errMsg != "" {
+				<div class="error-box">{ errMsg }</div>
 			}
 			<form method="post" action="/login">
 				<label class="field">
