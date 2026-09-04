@@ -23,6 +23,9 @@ type ServiceController interface {
 	Restart() error
 	IsActive() (bool, error)
 	IsEnabled() (bool, error)
+	// UptimeSeconds reports how long the unit has been running; ok=false
+	// when unknown.
+	UptimeSeconds() (float64, bool)
 }
 
 // Server executes operations against the CS2 server: service control via
@@ -40,9 +43,10 @@ func NewServer(cfg Config, store *Store) *Server {
 
 // ServiceStatus mirrors systemd state for the panel.
 type ServiceStatus struct {
-	Active  bool   `json:"active"`
-	Sub     string `json:"sub,omitempty"`
-	Enabled bool   `json:"enabled"`
+	Active        bool    `json:"active"`
+	Sub           string  `json:"sub,omitempty"`
+	Enabled       bool    `json:"enabled"`
+	UptimeSeconds float64 `json:"uptime_seconds,omitempty"`
 }
 
 // FullStatus is the /api/v1/server/status payload.
@@ -64,6 +68,9 @@ func (s *Server) Status(ctx context.Context) FullStatus {
 	out.Service.Active = active
 	if enabled, err := s.sysd.IsEnabled(); err == nil {
 		out.Service.Enabled = enabled
+	}
+	if secs, ok := s.sysd.UptimeSeconds(); ok {
+		out.Service.UptimeSeconds = secs
 	}
 	if !active {
 		return out

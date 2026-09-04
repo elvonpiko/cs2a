@@ -76,6 +76,32 @@ func (s *Systemd) IsEnabled() (bool, error) {
 	return strings.TrimSpace(string(out)) == "enabled", nil
 }
 
+// UptimeSeconds reports seconds since the unit last became active.
+func (s *Systemd) UptimeSeconds() (float64, bool) {
+	cmd := exec.Command(s.bin, "show", s.serviceName, "--property=ActiveEnterTimestamp", "--value")
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, false
+	}
+	ts := strings.TrimSpace(string(out))
+	if ts == "" {
+		return 0, false
+	}
+	// systemctl prints e.g. 2025-12-30T10:00:00+0000
+	t, err := time.Parse("2006-01-02T15:04:05-0700", ts)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339, ts)
+		if err != nil {
+			return 0, false
+		}
+	}
+	secs := time.Since(t).Seconds()
+	if secs < 0 {
+		return 0, false
+	}
+	return secs, true
+}
+
 // JournalTail returns the last n lines of the unit's journal.
 func (s *Systemd) JournalTail(n int) ([]string, error) {
 	if n <= 0 || n > 500 {
