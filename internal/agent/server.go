@@ -145,7 +145,7 @@ func (s *Server) Maps() ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("maps: %s does not exist", dir)
+			return []string{}, nil // fresh install: no maps yet
 		}
 		return nil, err
 	}
