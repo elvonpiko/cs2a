@@ -9,6 +9,10 @@
 #    sudo bash bootstrap.sh --unattended           # non-interactive defaults
 #    sudo bash bootstrap.sh --no-cs2               # panel+agent only, point at
 #                                                  #   an existing CS2 install
+#  Options: --unattended, --no-cs2
+#  The installer asks for an optional domain; when given, Caddy serves the
+#  panel with automatic HTTPS (Let's Encrypt). Without a domain the panel
+#  stays on its plain HTTP port as today.
 # ============================================================================
 set -euo pipefail
 
@@ -133,6 +137,11 @@ step "Configuration"
 PUBLIC_IP=$(curl -fs --max-time 4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 info "public ip: ${PUBLIC_IP:-unknown}"
 
+ask PANEL_DOMAIN "Domain for the panel (optional — enables automatic HTTPS via Caddy, enter to skip)" ""
+if [[ -n $PANEL_DOMAIN ]]; then
+  info "caddy will serve https://$PANEL_DOMAIN → 127.0.0.1:$CS2A_PANEL_PORT"
+fi
+
 ask CS2A_ROOT "Install root" "$CS2A_ROOT"
 ask GSLT "GSLT token for public servers (from steamcommunity.com/dev/managegameservers, enter to skip)" ""
 if [[ $WITH_CS2 -eq 1 ]]; then
@@ -158,7 +167,7 @@ cat <<PLAN
     cs2 dir     : $CS2_DIR
     game server : systemd:$CS2A_SERVICE_GAME (port $CS2A_GAME_PORT)
     agent       : 127.0.0.1:$CS2A_AGENT_PORT (loopback, token auth)
-    panel       : 0.0.0.0:$CS2A_PANEL_PORT  →  http://$PUBLIC_IP:$CS2A_PANEL_PORT
+    panel       : 0.0.0.0:$CS2A_PANEL_PORT  →  $([[ -n $PANEL_DOMAIN ]] && echo "https://$PANEL_DOMAIN (caddy, auto-HTTPS)" || echo "http://$PUBLIC_IP:$CS2A_PANEL_PORT")
     cs2 install : $([[ $WITH_CS2 -eq 1 ]] && echo "yes (steamcmd)" || echo "reuse existing")
 PLAN
 if [[ $UNATTENDED -eq 0 ]]; then
@@ -297,12 +306,57 @@ CFG
   chown -R "$CS2A_STEAM_USER:$CS2A_STEAM_USER" "$CFG_DIR"
 fi
 
+# ----------------------------- caddy (optional) -----------------------------
+if [[ -n $PANEL_DOMAIN ]]; then
+  step "Caddy reverse proxy (automatic HTTPS for $PANEL_DOMAIN)"
+  if ! command -v caddy &>/dev/null; then
+    if command -v apt-get &>/dev/null; then
+      info "installing caddy from the official repository…"
+      apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl >/dev/null
+      curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --batch --yes --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null
+      curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+      apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq caddy >/dev/null
+      ok "caddy installed"
+    else
+      warn "caddy not installed automatically (no apt) — install it manually, the Caddyfile is still written"
+      mkdir -p /etc/caddy
+    fi
+  else
+    ok "caddy already installed"
+  fi
+  mkdir -p /etc/caddy
+  # idempotent, minimal site block; keeps any existing config intact
+  if ! grep -q "^$PANEL_DOMAIN " /etc/caddy/Caddyfile 2>/dev/null; then
+    cat > /etc/caddy/Caddyfile <<CADDY
+$PANEL_DOMAIN {
+    reverse_proxy 127.0.0.1:$CS2A_PANEL_PORT
+}
+
+CADDY
+    ok "Caddyfile written for $PANEL_DOMAIN"
+  else
+    ok "Caddyfile already has a $PANEL_DOMAIN site block"
+  fi
+  systemctl enable --now caddy >/dev/null 2>&1 || systemctl restart caddy
+  systemctl reload caddy 2>/dev/null || true
+  ok "caddy running — certificate for $PANEL_DOMAIN will be issued automatically"
+  # when caddy fronts the panel, the raw HTTP port need not be public
+  if command -v ufw &>/dev/null; then
+    ufw delete allow "$CS2A_PANEL_PORT/tcp" >/dev/null 2>&1 || true
+  fi
+fi
+
 # ----------------------------- firewall -------------------------------------
-step "Firewall (safe: only game + panel ports are opened)"
+step "Firewall (safe: only game + panel port + 80/443 when needed)"
 if command -v ufw &>/dev/null; then
   ufw allow "$CS2A_GAME_PORT/tcp" >/dev/null 2>&1 && ok "ufw allow $CS2A_GAME_PORT/tcp (rcon)"
   ufw allow "$CS2A_GAME_PORT/udp" >/dev/null 2>&1 && ok "ufw allow $CS2A_GAME_PORT/udp (game + a2s)"
-  ufw allow "$CS2A_PANEL_PORT/tcp" >/dev/null 2>&1 && ok "ufw allow $CS2A_PANEL_PORT/tcp (panel)"
+  if [[ -n $PANEL_DOMAIN ]]; then
+    ufw allow 80/tcp >/dev/null 2>&1 && ok "ufw allow 80/tcp (ACME http-01)"
+    ufw allow 443/tcp >/dev/null 2>&1 && ok "ufw allow 443/tcp (panel via caddy)"
+  else
+    ufw allow "$CS2A_PANEL_PORT/tcp" >/dev/null 2>&1 && ok "ufw allow $CS2A_PANEL_PORT/tcp (panel)"
+  fi
 else
   info "ufw not present — if a firewall is active, open: $CS2A_GAME_PORT/{tcp,udp} and $CS2A_PANEL_PORT/tcp"
 fi
@@ -378,7 +432,7 @@ PANEL_UP=$(curl -fs -o /dev/null -w '%{http_code}' "http://127.0.0.1:$CS2A_PANEL
 
 printf "\n%s%s──────── INSTALLATION COMPLETE ────────%s\n\n" "$BOLD" "$GREEN" "$RESET"
 cat <<SUMMARY
-    Panel URL      : http://$PUBLIC_IP:$CS2A_PANEL_PORT
+    Panel URL      : $([[ -n $PANEL_DOMAIN ]] && echo "https://$PANEL_DOMAIN" || echo "http://$PUBLIC_IP:$CS2A_PANEL_PORT")
     Admin user     : $SETUP_ADMIN
     Admin password : $SETUP_PASS
     Agent health   : ${HEALTH:+ok}${HEALTH:-starting…}

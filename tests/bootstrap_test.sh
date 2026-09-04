@@ -39,6 +39,10 @@ check "panel env file is secret"   grep -q "panel.env" scripts/bootstrap.sh
 check "steamcmd app id 730"        grep -q "app_update \"\$CS2A_APP_ID\"" scripts/bootstrap.sh
 check "steamclient.so sdk64 link"  grep -q "sdk64" scripts/bootstrap.sh
 check "firewall opens game port"   grep -q "ufw allow \"\$CS2A_GAME_PORT/udp\"" scripts/bootstrap.sh
+check "caddy domain question"      grep -q 'PANEL_DOMAIN' scripts/bootstrap.sh
+check "caddy reverse_proxy block"  grep -q "reverse_proxy 127.0.0.1:\$CS2A_PANEL_PORT" scripts/bootstrap.sh
+check "caddy closes raw port"      grep -q 'ufw delete allow' scripts/bootstrap.sh
+check "fallback keeps direct port" grep -q 'CS2A_PANEL_PORT/tcp' scripts/bootstrap.sh
 
 echo
 echo "== go-side plan package =="
