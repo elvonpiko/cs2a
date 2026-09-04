@@ -43,6 +43,11 @@ check "caddy domain question"      grep -q 'PANEL_DOMAIN' scripts/bootstrap.sh
 check "caddy reverse_proxy block"  grep -q "reverse_proxy 127.0.0.1:\$CS2A_PANEL_PORT" scripts/bootstrap.sh
 check "caddy closes raw port"      grep -q 'ufw delete allow' scripts/bootstrap.sh
 check "fallback keeps direct port" grep -q 'CS2A_PANEL_PORT/tcp' scripts/bootstrap.sh
+check "asks existing unit name"    grep -q 'Name of your EXISTING CS2 systemd unit' scripts/bootstrap.sh
+check "never clobbers game unit"   grep -q 'keeping your existing.*untouched' scripts/bootstrap.sh
+check "wp_dsn optional field"      grep -q 'wp_dsn' scripts/bootstrap.sh
+check "mariadb provisioning"       grep -q 'CREATE DATABASE IF NOT EXISTS cs2_wp' scripts/bootstrap.sh
+check "game port is asked"         grep -q 'Game port (A2S + RCON' scripts/bootstrap.sh
 
 echo
 echo "== go-side plan package =="

@@ -150,12 +150,19 @@ if [[ $WITH_CS2 -eq 1 ]]; then
 fi
 if [[ $WITH_CS2 -eq 0 ]]; then
   ask EXISTING_CS2_DIR "Path of your existing CS2 install (contains game/)" "$CS2A_ROOT/cs2"
+  ask CS2A_SERVICE_GAME "Name of your EXISTING CS2 systemd unit" "$CS2A_SERVICE_GAME"
+  info "the installer will keep your unit as-is and point cs2a at it"
 fi
+ask CS2A_GAME_PORT "Game port (A2S + RCON, must match the server launch)" "$CS2A_GAME_PORT"
 ask SET_PANEL_PORT "Panel port" "$CS2A_PANEL_PORT"
 ask SETUP_ADMIN "Admin username for the panel" "admin"
 ask_secret SETUP_PASS "Admin password"
 ask_secret AGENT_TOKEN "Agent API token"
 ask_secret SETUP_TOKEN "First-login setup token"
+if [[ $WITH_CS2 -eq 0 ]]; then
+  info "RCON password: use the one already in your server.cfg (and make sure the launch line has -usercon)"
+fi
+ask SETUP_WP_DB "Set up MariaDB + a database for skin sync (WeaponPaints)? (y/N)" "n"
 ask_secret RCON_PASS "RCON password"
 
 CS2_DIR="$CS2A_ROOT/cs2"
@@ -222,6 +229,9 @@ write_if_changed() { # write_if_changed <file> <content>
   fi
 }
 
+WP_JSON_LINE=""
+[[ -n $WP_DSN ]] && WP_JSON_LINE=$',\n  "wp_dsn": "'$WP_DSN'"'
+
 AGENT_JSON=$(cat <<EOF
 {
   "listen": "127.0.0.1:$CS2A_AGENT_PORT",
@@ -232,8 +242,8 @@ AGENT_JSON=$(cat <<EOF
   "rcon_password": "$RCON_PASS",
   "a2s_addr": "127.0.0.1:$CS2A_GAME_PORT",
   "db_path": "$CS2A_ROOT/var/agent.db",
-  "plugin_cache": "$CS2A_ROOT/cache/plugins"
-}
+  "plugin_cache": "$CS2A_ROOT/cache/plugins"$([[ -n $WP_DSN ]] && echo ,
+  "wp_dsn": "$WP_DSN")$
 EOF
 )
 PANEL_JSON=$(cat <<EOF
@@ -306,6 +316,39 @@ CFG
   chown -R "$CS2A_STEAM_USER:$CS2A_STEAM_USER" "$CFG_DIR"
 fi
 
+# ----------------------------- MariaDB (optional, skin sync) ----------------
+WP_DSN=""
+if [[ ${SETUP_WP_DB,,} == y* ]]; then
+  step "MariaDB + WeaponPaints database"
+  if ! command -v mysql &>/dev/null && ! command -v mariadb &>/dev/null; then
+    if command -v apt-get &>/dev/null; then
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq mariadb-server >/dev/null
+      ok "mariadb-server installed"
+    else
+      warn "no apt — install MariaDB manually, then rerun to configure the database"
+    fi
+  else
+    ok "mariadb already present"
+  fi
+  if command -v mysql &>/dev/null || command -v mariadb &>/dev/null; then
+    MYSQL_BIN=$(command -v mariadb || command -v mysql)
+    WP_DB_PASS=$(head -c 18 /dev/urandom | base64 | tr -d '/=+\n' | cut -c1-20)
+    systemctl enable --now mariadb >/dev/null 2>&1
+    $MYSQL_BIN <<SQL
+CREATE DATABASE IF NOT EXISTS cs2_wp CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'cs2a'@'localhost' IDENTIFIED BY '$WP_DB_PASS';
+ALTER USER 'cs2a'@'localhost' IDENTIFIED BY '$WP_DB_PASS';
+GRANT ALL PRIVILEGES ON cs2_wp.* TO 'cs2a'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+    WP_DSN="cs2a:$WP_DB_PASS@tcp(127.0.0.1:3306)/cs2_wp"
+    ok "database cs2_wp ready (user cs2a)"
+    info "WeaponPaints reads its own DB config — after installing it, paste these creds"
+    info "into its config via Panel → Plugins → cs2-WeaponPaints → Edit config:"
+    info "  host 127.0.0.1  port 3306  db cs2_wp  user cs2a  password $WP_DB_PASS"
+  fi
+fi
+
 # ----------------------------- caddy (optional) -----------------------------
 if [[ -n $PANEL_DOMAIN ]]; then
   step "Caddy reverse proxy (automatic HTTPS for $PANEL_DOMAIN)"
@@ -363,7 +406,9 @@ fi
 
 # ----------------------------- systemd --------------------------------------
 step "systemd units"
-cat > /etc/systemd/system/$CS2A_SERVICE_GAME.service <<UNIT
+GAME_UNIT_FILE="/etc/systemd/system/$CS2A_SERVICE_GAME.service"
+if [[ $WITH_CS2 -eq 1 ]]; then
+cat > "$GAME_UNIT_FILE" <<UNIT
 [Unit]
 Description=CS2 dedicated server (managed by cs2a)
 After=network-online.target
@@ -381,6 +426,11 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 UNIT
+elif [[ -f $GAME_UNIT_FILE ]]; then
+  ok "keeping your existing $CS2A_SERVICE_GAME.service untouched"
+else
+  warn "unit $CS2A_SERVICE_GAME.service not found — the agent cannot start/stop/restart the server until a unit exists"
+fi
 
 cat > /etc/systemd/system/cs2a-agent.service <<UNIT
 [Unit]
@@ -420,9 +470,9 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now cs2a-agent.service cs2a-panel.service >/dev/null 2>&1
 ok "cs2a-agent + cs2a-panel enabled and started"
-if [[ $WITH_CS2 -eq 1 ]]; then
+if [[ -f $GAME_UNIT_FILE ]]; then
   systemctl enable "$CS2A_SERVICE_GAME.service" >/dev/null 2>&1
-  ok "$CS2A_SERVICE_GAME.service enabled (start it from the panel)"
+  ok "$CS2A_SERVICE_GAME.service enabled (manage it from the panel)"
 fi
 
 # ----------------------------- summary --------------------------------------
@@ -437,6 +487,7 @@ cat <<SUMMARY
     Admin password : $SETUP_PASS
     Agent health   : ${HEALTH:+ok}${HEALTH:-starting…}
     Panel login    : HTTP $PANEL_UP
+    Skin sync      : $([[ -n $WP_DSN ]] && echo "MariaDB configured (wp_dsn set)" || echo "not configured — rerun and choose MariaDB setup to enable")
     Config files   : $CS2A_ROOT/etc/{agent,panel}.json
     Service units  : cs2a-agent, cs2a-panel$([[ $WITH_CS2 -eq 1 ]] && echo ", $CS2A_SERVICE_GAME")
 
