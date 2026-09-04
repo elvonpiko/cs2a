@@ -48,6 +48,9 @@ check "never clobbers game unit"   grep -q 'keeping your existing.*untouched' sc
 check "wp_dsn optional field"      grep -q 'wp_dsn' scripts/bootstrap.sh
 check "mariadb provisioning"       grep -q 'CREATE DATABASE IF NOT EXISTS cs2_wp' scripts/bootstrap.sh
 check "game port is asked"         grep -q 'Game port (A2S + RCON' scripts/bootstrap.sh
+check "detects existing install"   grep -q 'detect_existing' scripts/bootstrap.sh
+check "parses rcon from cfg"       grep -q 'rcon_password' scripts/bootstrap.sh
+check "reuse mode default on detect" grep -q 'DETECTED_OK=1' scripts/bootstrap.sh
 
 echo
 echo "== go-side plan package =="

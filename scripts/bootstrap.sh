@@ -113,6 +113,47 @@ ensure_line_in_file() { # ensure_line_in_file <file> <line>
   grep -qxF "$2" "$1" 2>/dev/null || echo "$2" >> "$1"
 }
 
+# ----------------------------- detection ------------------------------------
+# When a CS2 install already exists (systemd unit / SteamCMD dir), prefill the
+# answers from it instead of asking blind questions. Everything remains
+# overridable interactively (or via env in --unattended).
+DETECTED_CS2_DIR=""
+DETECTED_UNIT=""
+DETECTED_PORT=""
+DETECTED_RCON=""
+
+detect_existing() {
+  # find candidate cs2 dirs from systemd unit files with "cs2" in ExecStart
+  local f dir
+  for f in /etc/systemd/system/*.service /lib/systemd/system/*.service; do
+    [[ -f $f ]] || continue
+    grep -qiE "ExecStart.*(cs2|srcds)" "$f" 2>/dev/null || continue
+    grep -qi "usercon" "$f" 2>/dev/null || continue
+    DETECTED_UNIT=$(basename "$f" .service)
+    dir=$(grep -oE "ExecStart=[^ ]*cs2[^ ]*" "$f" 2>/dev/null | head -1)
+    # derive install root: prefer WorkingDirectory=.../game, else force_install_dir
+    local wd; wd=$(grep -oE "^WorkingDirectory=.*" "$f" | head -1 | cut -d= -f2)
+    if [[ $wd == */game ]]; then DETECTED_CS2_DIR="${wd%/game}"
+    else DETECTED_CS2_DIR=$(dirname "$(dirname "$dir")" 2>/dev/null); fi
+    # port from the launch line
+    DETECTED_PORT=$(grep -oE "\+?port [0-9]+" "$f" | head -1 | awk '{print $2}')
+    break
+  done
+  # rcon_password straight from the server.cfg
+  local cfg="$DETECTED_CS2_DIR/game/csgo/cfg/server.cfg"
+  [[ -f $cfg ]] || cfg="$EXISTING_CS2_DIR_FALLBACK/game/csgo/cfg/server.cfg"
+  if [[ -n $DETECTED_CS2_DIR && -f $DETECTED_CS2_DIR/game/csgo/cfg/server.cfg ]]; then
+    DETECTED_RCON=$(grep -oE '^rcon_password\s+"?[^"]*"?' "$DETECTED_CS2_DIR/game/csgo/cfg/server.cfg" | head -1 | sed -E 's/^rcon_password\s+"?//; s/"$//')
+  fi
+  DETECTED_PORT=${DETECTED_PORT:-27015}
+}
+EXISTING_CS2_DIR_FALLBACK=""
+detect_existing
+if [[ -n $DETECTED_CS2_DIR && -f $DETECTED_CS2_DIR/game/csgo/gameinfo.gi ]]; then
+  WITH_CS2=0   # existing install found: default to reuse mode
+  DETECTED_OK=1
+fi
+
 # ----------------------------- preflight -----------------------------------
 banner
 step "Preflight"
@@ -137,6 +178,11 @@ step "Configuration"
 PUBLIC_IP=$(curl -fs --max-time 4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')
 info "public ip: ${PUBLIC_IP:-unknown}"
 
+if [[ ${DETECTED_OK:-0} == 1 ]]; then
+  ok "found existing CS2 install: $DETECTED_CS2_DIR (unit: ${DETECTED_UNIT:-?}, port: $DETECTED_PORT) — reusing it"
+  info "answer with a dash (-) at any prompt to keep the detected value"
+fi
+
 ask PANEL_DOMAIN "Domain for the panel (optional — enables automatic HTTPS via Caddy, enter to skip)" ""
 if [[ -n $PANEL_DOMAIN ]]; then
   info "caddy will serve https://$PANEL_DOMAIN → 127.0.0.1:$CS2A_PANEL_PORT"
@@ -149,11 +195,14 @@ if [[ $WITH_CS2 -eq 1 ]]; then
   [[ ${INSTALL_CS2,,} == y* ]] || WITH_CS2=0
 fi
 if [[ $WITH_CS2 -eq 0 ]]; then
-  ask EXISTING_CS2_DIR "Path of your existing CS2 install (contains game/)" "$CS2A_ROOT/cs2"
-  ask CS2A_SERVICE_GAME "Name of your EXISTING CS2 systemd unit" "$CS2A_SERVICE_GAME"
+  ask EXISTING_CS2_DIR "Path of your existing CS2 install (contains game/)" "${DETECTED_CS2_DIR:-$CS2A_ROOT/cs2}"
+  [[ $EXISTING_CS2_DIR == "-" ]] && EXISTING_CS2_DIR="${DETECTED_CS2_DIR:-$CS2A_ROOT/cs2}"
+  ask CS2A_SERVICE_GAME "Name of your EXISTING CS2 systemd unit" "${DETECTED_UNIT:-$CS2A_SERVICE_GAME}"
+  [[ $CS2A_SERVICE_GAME == "-" ]] && CS2A_SERVICE_GAME="${DETECTED_UNIT:-cs2-server}"
   info "the installer will keep your unit as-is and point cs2a at it"
 fi
-ask CS2A_GAME_PORT "Game port (A2S + RCON, must match the server launch)" "$CS2A_GAME_PORT"
+ask CS2A_GAME_PORT "Game port (A2S + RCON, must match the server launch)" "${DETECTED_PORT:-$CS2A_GAME_PORT}"
+[[ $CS2A_GAME_PORT == "-" ]] && CS2A_GAME_PORT="${DETECTED_PORT:-27015}"
 ask SET_PANEL_PORT "Panel port" "$CS2A_PANEL_PORT"
 ask SETUP_ADMIN "Admin username for the panel" "admin"
 ask_secret SETUP_PASS "Admin password"
