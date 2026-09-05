@@ -20,6 +20,8 @@ type fakeServer struct {
 
 	mu        sync.Mutex
 	responses map[string]string // command -> response
+	delay     time.Duration     // pause between packets of one response
+	noMarker  bool              // ignore the end-marker request (older builds)
 	wg        sync.WaitGroup    // waits for accept/conn goroutines
 }
 
@@ -100,6 +102,18 @@ func (s *fakeServer) serveConn(conn net.Conn) {
 			resp := s.responses[strings.TrimSpace(string(body))]
 			s.mu.Unlock()
 			s.write(conn, id, typeServerDataResponseValue, resp)
+		case typeServerDataResponseValue:
+			// The client's end marker. A real SRCDS mirrors the bogus request
+			// back and then sends a second packet with a fixed body, which is
+			// how a client knows a split response has finished.
+			s.mu.Lock()
+			skip := s.noMarker
+			s.mu.Unlock()
+			if skip || !authed {
+				continue
+			}
+			s.writePacket(conn, id, typeServerDataResponseValue, "")
+			s.writePacket(conn, id, typeServerDataResponseValue, "\x00\x01\x00\x00")
 		default:
 			// ignore unknown packet types
 		}
@@ -108,12 +122,20 @@ func (s *fakeServer) serveConn(conn net.Conn) {
 
 func (s *fakeServer) write(conn net.Conn, id, typ int32, body string) {
 	s.t.Helper()
-	// Real servers split large responses into ~4096-byte packets; do the same
-	// so the client's reassembly logic is exercised.
+	// Real servers split large responses into 4096-byte packets; do the same so
+	// the client's reassembly is exercised. delay reproduces a server that
+	// pauses mid-response, which is what made the client return half a `status`
+	// as a success.
 	const chunk = 4096
+	s.mu.Lock()
+	delay := s.delay
+	s.mu.Unlock()
 	for len(body) > chunk {
 		s.writePacket(conn, id, typ, body[:chunk])
 		body = body[chunk:]
+		if delay > 0 {
+			time.Sleep(delay)
+		}
 	}
 	s.writePacket(conn, id, typ, body)
 }
@@ -236,10 +258,12 @@ func TestPacketSizeMath(t *testing.T) {
 	if size := 4 + 4 + len(body) + 2; size != 4106 {
 		t.Fatalf("size = %d, want 4106", size)
 	}
-	if maxPacketSize != 4113 {
-		t.Fatalf("maxPacketSize = %d, want 4113", maxPacketSize)
+	// A full-size body is the protocol's "more is coming" signal, so the
+	// constant the client compares against must be the body limit itself.
+	if maxBodySize != 4096 {
+		t.Fatalf("maxBodySize = %d, want 4096", maxBodySize)
 	}
-	if !strings.Contains(fmt.Sprint(maxPacketSize), "4113") {
+	if !strings.Contains(fmt.Sprint(maxBodySize), "4096") {
 		t.Fatal("unreachable")
 	}
 }
