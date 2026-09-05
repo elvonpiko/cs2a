@@ -76,13 +76,20 @@ func extractZip(src io.ReaderAt, size int64, dest string, strip int) ([]string, 
 		if !ok {
 			continue
 		}
-		if f.FileInfo().IsDir() {
-			tops[topOf(name)] = struct{}{}
-			continue
-		}
 		target, err := sanitizeJoin(dest, name)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s", ErrUnsafePath, f.Name)
+		}
+		if f.FileInfo().IsDir() {
+			// Directory entries are created rather than skipped: a plugin that
+			// ships an empty configs/ or data/ directory expects it to exist,
+			// and creating it here means it is also handed to the game user by
+			// the ownership pass instead of appearing later, root-owned.
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return nil, err
+			}
+			tops[topOf(name)] = struct{}{}
+			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return nil, err
@@ -166,6 +173,20 @@ func extractTarGz(src io.Reader, dest string, strip int) ([]string, error) {
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			// Created, not skipped: see extractZip — an empty configs/ or data/
+			// directory a plugin ships is part of its expected layout.
+			name, ok := stripComponents(hdr.Name, strip)
+			if !ok {
+				continue
+			}
+			target, err := sanitizeJoin(dest, name)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %s", ErrUnsafePath, hdr.Name)
+			}
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return nil, err
+			}
+			tops[topOf(name)] = struct{}{}
 			continue
 		case tar.TypeReg, tar.TypeSymlink:
 			// symlinks are stored as regular files (content copy) to keep

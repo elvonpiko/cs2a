@@ -149,6 +149,99 @@ func TestExtractArchiveUnsupported(t *testing.T) {
 	}
 }
 
+// A plugin that ships an empty directory (configs/, data/, logs/) expects it to
+// exist. Both extractors used to skip directory entries entirely, so the plugin
+// created it itself on first load — as the game user if it was lucky, and not at
+// all if the parent was root-owned.
+func TestExtractCreatesEmptyDirectories(t *testing.T) {
+	t.Run("zip", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		if _, err := zw.Create("addons/counterstrikesharp/plugins/Thing/data/"); err != nil {
+			t.Fatal(err)
+		}
+		w, err := zw.Create("addons/counterstrikesharp/plugins/Thing/Thing.dll")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte{1}); err != nil {
+			t.Fatal(err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		if _, err := extractZip(readerAt(buf.Bytes()), int64(buf.Len()), dest, 0); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(filepath.Join(dest, "addons/counterstrikesharp/plugins/Thing/data"))
+		if err != nil {
+			t.Fatalf("empty directory not created: %v", err)
+		}
+		if !fi.IsDir() {
+			t.Fatal("data must be a directory")
+		}
+	})
+
+	t.Run("tar.gz", func(t *testing.T) {
+		var raw bytes.Buffer
+		gw := gzip.NewWriter(&raw)
+		tw := tar.NewWriter(gw)
+		if err := tw.WriteHeader(&tar.Header{Name: "addons/metamod/logs/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.WriteHeader(&tar.Header{Name: "addons/metamod/metaplugins.ini", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		if _, err := extractTarGz(bytes.NewReader(raw.Bytes()), dest, 0); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(filepath.Join(dest, "addons/metamod/logs"))
+		if err != nil {
+			t.Fatalf("empty directory not created: %v", err)
+		}
+		if !fi.IsDir() {
+			t.Fatal("logs must be a directory")
+		}
+	})
+
+	// A directory entry is subject to the same containment rules as a file.
+	t.Run("no escape", func(t *testing.T) {
+		var raw bytes.Buffer
+		gw := gzip.NewWriter(&raw)
+		tw := tar.NewWriter(gw)
+		if err := tw.WriteHeader(&tar.Header{Name: "../escaped/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+			t.Fatal(err)
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dest := t.TempDir()
+		if _, err := extractTarGz(bytes.NewReader(raw.Bytes()), dest, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(dest, "..", "escaped")); err == nil {
+			t.Fatal("a directory entry escaped the destination")
+		}
+		if _, err := os.Stat(filepath.Join(dest, "escaped")); err != nil {
+			t.Fatalf("the entry should have been contained, not dropped: %v", err)
+		}
+	})
+}
+
 // Several upstream releases wrap everything in a version directory
 // (SharpTimer-v0.4.0/addons/...). Strip must remove it so files land in the
 // right place, and entries inside the stripped prefix alone are skipped.

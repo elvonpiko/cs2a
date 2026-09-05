@@ -146,6 +146,23 @@ func (js *Jobs) List() []Job {
 	return out
 }
 
+// RunningTargets lists the catalog ids that currently have a job in flight.
+// Callers use it to refuse work that would fight a running install: an
+// uninstall that deletes files an extraction is still writing leaves a
+// half-installed plugin whose recorded manifest no longer matches the disk.
+func (js *Jobs) RunningTargets() []string {
+	js.mu.Lock()
+	defer js.mu.Unlock()
+	var out []string
+	for _, j := range js.jobs {
+		if j.Status == JobRunning {
+			out = append(out, j.Target)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // snapshot copies a job under the registry lock.
 func (j *Job) snapshot(js *Jobs) *Job {
 	js.mu.Lock()

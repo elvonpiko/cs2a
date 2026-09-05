@@ -37,6 +37,11 @@ type CatalogEntry struct {
 	AssetReject string `json:"asset_reject,omitempty"`
 	// URL is a direct download (used for metamod's stable latest build).
 	URL string `json:"url,omitempty"`
+	// URLMirrors are alternate hosts serving the identical artifact, tried in
+	// order when URL fails. The AlliedModders drop is Cloudflare-fronted and
+	// occasionally truncates responses; metamod is the root dependency of the
+	// whole catalog, so one bad edge there must not fail every install.
+	URLMirrors []string `json:"url_mirrors,omitempty"`
 	// URLIsPointer marks URL as a text file whose body names the real
 	// artifact, relative to URL's directory (the AlliedModders "-latest-"
 	// scheme). Without this the URL 404s as soon as upstream rolls a build.
@@ -59,13 +64,36 @@ type CatalogEntry struct {
 	// ConfigPath is the JSON config file (relative to game/csgo) the panel may
 	// edit, if any.
 	ConfigPath string `json:"config_path,omitempty"`
+
+	// Installed and InstalledVersion are runtime state filled in by
+	// Installer.Catalog. They are typed fields rather than an annotation
+	// spliced into Description: the panel used to parse "[installed v1.2] …"
+	// back out of the description text, which broke as soon as a version
+	// string contained a "]" and silently mislabelled cards.
+	Installed        bool   `json:"installed,omitempty"`
+	InstalledVersion string `json:"installed_version,omitempty"`
+	// RequiredBy names installed components that depend on this one. Runtime
+	// state, like Installed: the panel uses it to explain why Uninstall is
+	// unavailable instead of letting the operator break their own server.
+	RequiredBy []string `json:"required_by,omitempty"`
 }
+
+// HasConfig reports whether the panel can offer a config editor for this entry.
+func (e CatalogEntry) HasConfig() bool { return e.ConfigPath != "" }
 
 // cssharpPlugins is where CounterStrikeSharp loads plugin folders from.
 const cssharpPlugins = "addons/counterstrikesharp/plugins"
 
 // cssharpConfigs is where CounterStrikeSharp generates plugin configs.
 const cssharpConfigs = "addons/counterstrikesharp/configs/plugins"
+
+// metamodMirrors are the official AlliedModders aliases for the Metamod drop.
+// All three hostnames front the same origin and serve byte-identical builds
+// (verified by sha256), so they are interchangeable when one edge misbehaves.
+var metamodMirrors = []string{
+	"https://www.metamodsource.net/mmsdrop/2.0/mmsource-latest-linux",
+	"https://www.sourcemm.net/mmsdrop/2.0/mmsource-latest-linux",
+}
 
 // DefaultCatalog is the shipped catalog. Versions are never hardcoded: every
 // entry resolves against the live release list at install time. Layouts below
@@ -80,7 +108,14 @@ func DefaultCatalog() []CatalogEntry {
 			Kind:        KindRuntime,
 			// mmsource-latest-linux is a pointer file containing the current
 			// build's filename (e.g. mmsource-2.0.0-git1411-linux.tar.gz).
+			//
+			// Only the 2.0 branch has a CS2 loader
+			// (addons/metamod/bin/linuxsteamrt64/metamod.2.cs2.so). The GitHub
+			// releases of metamod-source cannot be used instead: every 2.0.x
+			// release is flagged as a prerelease, so /releases/latest answers
+			// with the 1.12 branch, which contains no CS2 binary at all.
 			URL:          "https://mms.alliedmods.net/mmsdrop/2.0/mmsource-latest-linux",
+			URLMirrors:   metamodMirrors,
 			URLIsPointer: true,
 			Owns:         []string{"addons/metamod", "addons/metamod.vdf", "addons/metamod_x64.vdf"},
 			PostInstall:  []string{"gameinfo-metamod"},
@@ -111,12 +146,18 @@ func DefaultCatalog() []CatalogEntry {
 			Repo:        "Nereziel/cs2-WeaponPaints",
 			// The release also carries WeaponPaints-Website.zip, which is the
 			// PHP web UI and must not be installed onto the game server.
-			AssetRegex: `(?i)^weaponpaints(-[0-9][^/]*)?\.zip$`,
+			AssetRegex:  `(?i)^weaponpaints(-[^/]*)?\.zip$`,
+			AssetReject: `(?i)(website|windows)`,
 			// WeaponPaints.zip contains a bare WeaponPaints/ folder, not an
-			// addons/ tree, so it is placed into the plugins directory.
-			Dest:        cssharpPlugins,
-			Owns:        []string{cssharpPlugins + "/WeaponPaints"},
-			PostInstall: []string{"guidelines-off", "wp-default-config"},
+			// addons/ tree, so it is placed into the plugins directory. It also
+			// ships a second top-level gamedata/ dir, which wp-gamedata moves
+			// to the path the plugin reads (see placeWeaponPaintsGamedata).
+			Dest: cssharpPlugins,
+			Owns: []string{
+				cssharpPlugins + "/WeaponPaints",
+				"addons/counterstrikesharp/gamedata/weaponpaints.json",
+			},
+			PostInstall: []string{"guidelines-off", "wp-gamedata", "wp-default-config"},
 			Homepage:    "https://github.com/Nereziel/cs2-WeaponPaints",
 			ConfigPath:  cssharpConfigs + "/WeaponPaints/WeaponPaints.json",
 		},
@@ -149,8 +190,13 @@ func DefaultCatalog() []CatalogEntry {
 			AssetRegex:  `(?i)^cs2-simpleadmin-.*\.zip$`,
 			// Ships a bare counterstrikesharp/ tree (plugins/ + shared/).
 			Dest: "addons",
+			// The archive installs two companion modules next to the main
+			// plugin; both carry their own copy of the shared API and break
+			// when it is removed, so uninstall has to take all four paths.
 			Owns: []string{
 				cssharpPlugins + "/CS2-SimpleAdmin",
+				cssharpPlugins + "/CS2-SimpleAdmin_FunCommands",
+				cssharpPlugins + "/CS2-SimpleAdmin_StealthModule",
 				"addons/counterstrikesharp/shared/CS2-SimpleAdminApi",
 			},
 			Homepage:   "https://github.com/daffyyyy/CS2-SimpleAdmin",
@@ -184,14 +230,20 @@ func DefaultCatalog() []CatalogEntry {
 			Kind:        KindCSSharpPlugin,
 			Requires:    []string{"cssharp"},
 			Repo:        "B3none/cs2-retakes",
-			AssetRegex:  `(?i)^retakesplugin-[0-9][^/]*\.zip$`,
+			// Releases were renamed from cs2-retakes-* to RetakesPlugin-*;
+			// accept both so pinning an older tag still resolves.
+			AssetRegex: `(?i)^(retakesplugin|cs2-retakes)-[0-9][^/]*\.zip$`,
 			// The default bundle includes the per-map spawn configs; the
 			// "-no-map-configs" variant would leave retakes unplayable until
-			// the admin sourced spawns themselves.
-			AssetReject: `(?i)no-map-configs`,
-			Owns:        []string{cssharpPlugins + "/RetakesPlugin"},
-			Homepage:    "https://github.com/B3none/cs2-retakes",
-			ConfigPath:  cssharpConfigs + "/RetakesPlugin/RetakesPlugin.json",
+			// the admin sourced spawns themselves. "shared" is the separate
+			// library-only asset of the old naming scheme.
+			AssetReject: `(?i)(no-map-configs|shared)`,
+			Owns: []string{
+				cssharpPlugins + "/RetakesPlugin",
+				"addons/counterstrikesharp/shared/RetakesPluginShared",
+			},
+			Homepage:   "https://github.com/B3none/cs2-retakes",
+			ConfigPath: cssharpConfigs + "/RetakesPlugin/RetakesPlugin.json",
 		},
 		{
 			ID:          "deathmatch",
@@ -238,13 +290,18 @@ func DefaultCatalog() []CatalogEntry {
 			Requires:    []string{"metamod"},
 			Repo:        "Source2ZE/CS2Fixes",
 			// steamrt3 matches the runtime CS2 dedicated servers ship with.
-			AssetRegex: `(?i)^cs2fixes-.*steamrt3\.tar\.gz$`,
+			// The steamrt3/steamrt4 split is recent; every release up to v1.19
+			// published a plain "-linux" tarball, so both names are accepted
+			// (steamrt4 and windows still never match).
+			AssetRegex: `(?i)^cs2fixes-.*-(steamrt3|linux)\.tar\.gz$`,
 			Owns: []string{
 				"addons/cs2fixes",
 				"addons/metamod/cs2fixes.vdf",
 				"cfg/cs2fixes",
 				"materials/cs2fixes",
 				"particles/cs2fixes",
+				"soundevents/soundevents_zr.vsndevts_c",
+				"sounds/zr",
 			},
 			Homepage: "https://github.com/Source2ZE/CS2Fixes",
 		},

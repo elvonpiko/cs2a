@@ -72,12 +72,15 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
 	})
-	// the real WeaponPaints.zip holds a bare WeaponPaints/ folder — the
-	// installer must place it under the cssharp plugins dir
+	// the real WeaponPaints.zip holds a bare WeaponPaints/ folder plus a second
+	// top-level gamedata/ dir — the installer must place the folder under the
+	// cssharp plugins dir and lift gamedata to where the plugin reads it
 	mux.HandleFunc("/assets/wp.zip", func(w http.ResponseWriter, r *http.Request) {
 		zipBytes, _ := makeZip(map[string][]byte{
-			"WeaponPaints/WeaponPaints.dll": {9},
-			"WeaponPaints/lang/en.json":     []byte("{}"),
+			"WeaponPaints/WeaponPaints.dll":           {9},
+			"WeaponPaints/lang/en.json":               []byte("{}"),
+			"WeaponPaints/gamedata/weaponpaints.json": []byte(`{"gamedata":1}`),
+			"gamedata/weaponpaints.json":              []byte(`{"gamedata":1}`),
 		})
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
@@ -153,6 +156,18 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 	dll := filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/plugins/WeaponPaints/WeaponPaints.dll")
 	if !fileExists(dll) {
 		t.Fatal("plugin dll missing")
+	}
+	// WeaponPaints refuses to load unless gamedata sits exactly two levels
+	// above its module dir; the archive ships it at its own root instead.
+	gamedata := filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/gamedata/weaponpaints.json")
+	if !fileExists(gamedata) {
+		t.Fatal("gamedata/weaponpaints.json was not lifted out of the plugin folder")
+	}
+	if fileExists(filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/plugins/gamedata")) {
+		t.Fatal("stray plugins/gamedata directory left behind")
+	}
+	if res.Warning != "" {
+		t.Fatalf("unexpected warning: %s", res.Warning)
 	}
 	// guidelines patch applied (weaponpaints post-install)
 	core := filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/configs/core.json")
@@ -284,6 +299,110 @@ func TestUninstallRefusesEscape(t *testing.T) {
 	}
 }
 
+// Removing Metamod:Source out from under CounterStrikeSharp used to succeed and
+// silently break every plugin on the server.
+func TestUninstallRefusesWhenSomethingDependsOnIt(t *testing.T) {
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	in := NewInstaller(cfg, store, DefaultCatalog(), nil)
+	for _, id := range []string{"metamod", "cssharp"} {
+		if err := store.SetPluginState(PluginState{
+			Name: id, Version: "v1", Status: "installed",
+			Manifest: map[string]string{"top0": "addons/" + id},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err := in.Uninstall("metamod")
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "CounterStrikeSharp") {
+		t.Fatalf("the error must name the blocker: %v", err)
+	}
+	if !in.IsInstalled("metamod") {
+		t.Fatal("state must be untouched after a refusal")
+	}
+
+	// With the dependent gone, metamod may be removed.
+	if err := in.Uninstall("cssharp"); err != nil {
+		t.Fatalf("uninstall cssharp: %v", err)
+	}
+	if err := in.Uninstall("metamod"); err != nil {
+		t.Fatalf("uninstall metamod: %v", err)
+	}
+}
+
+// Uninstalling metamod must also remove the gameinfo.gi search path it added;
+// the engine otherwise complains about a missing path on every boot.
+func TestUninstallRevertsGameinfoPatch(t *testing.T) {
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	in := NewInstaller(cfg, store, DefaultCatalog(), nil)
+	if err := os.MkdirAll(cfg.CSGODir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gi := filepath.Join(cfg.CSGODir(), "gameinfo.gi")
+	if err := os.WriteFile(gi, []byte("\t\t\tGame\tcsgo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := patchGameinfoMetamod(gi); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPluginState(PluginState{
+		Name: "metamod", Version: "v1", Status: "installed",
+		Manifest: map[string]string{"top0": "addons/metamod"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := in.Uninstall("metamod"); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	raw, err := os.ReadFile(gi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "csgo/addons/metamod") {
+		t.Fatalf("search path not removed:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "Game\tcsgo") {
+		t.Fatalf("the original line was destroyed:\n%s", raw)
+	}
+}
+
+// The revert must be idempotent and must not touch an operator's comment.
+func TestUnpatchGameinfoMetamod(t *testing.T) {
+	dir := t.TempDir()
+	gi := filepath.Join(dir, "gameinfo.gi")
+	body := "\t\t\t// we use csgo/addons/metamod here\n" +
+		"\t\t\tGame\tcsgo/addons/metamod\n" +
+		"\t\t\tGame\tcsgo\n"
+	if err := os.WriteFile(gi, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := unpatchGameinfoMetamod(gi); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := os.ReadFile(gi)
+	got := string(raw)
+	if strings.Contains(got, "Game\tcsgo/addons/metamod") {
+		t.Fatalf("search path survived:\n%s", got)
+	}
+	if !strings.Contains(got, "// we use csgo/addons/metamod here") {
+		t.Fatalf("the operator's comment was removed:\n%s", got)
+	}
+	// A missing file is not an error: the game may already be gone.
+	if err := unpatchGameinfoMetamod(filepath.Join(dir, "nope.gi")); err != nil {
+		t.Fatalf("missing gameinfo.gi: %v", err)
+	}
+}
+
 func TestSafeSubPath(t *testing.T) {
 	root := "/opt/cs2/game/csgo"
 	if !safeSubPath(root, "/opt/cs2/game/csgo/addons") {
@@ -300,7 +419,10 @@ func TestSafeSubPath(t *testing.T) {
 	}
 }
 
-func TestCatalogAnnotated(t *testing.T) {
+// Installed state must ride typed fields. It used to be spliced into
+// Description as "[installed v2] …" and parsed back out by the panel, which
+// mislabelled any version string containing a "]".
+func TestCatalogReportsInstalledState(t *testing.T) {
 	cfg := testConfig(t)
 	store, _ := OpenStore(cfg.DBPath)
 	defer store.Close()
@@ -312,15 +434,38 @@ func TestCatalogAnnotated(t *testing.T) {
 	}
 	found := false
 	for _, e := range cat {
-		if e.ID == "metamod" {
+		switch e.ID {
+		case "metamod":
 			found = true
-			if !strings.Contains(e.Description, "[installed v2]") {
-				t.Fatalf("description not annotated: %q", e.Description)
+			if !e.Installed || e.InstalledVersion != "v2" {
+				t.Fatalf("metamod = %+v", e)
+			}
+			if strings.Contains(e.Description, "installed") {
+				t.Fatalf("description must stay untouched: %q", e.Description)
+			}
+		default:
+			if e.Installed {
+				t.Errorf("%s reported as installed", e.ID)
 			}
 		}
 	}
 	if !found {
 		t.Fatal("metamod missing from catalog")
+	}
+}
+
+// HasConfig decides whether a plugin card offers a config editor; every card
+// used to claim one.
+func TestCatalogHasConfig(t *testing.T) {
+	byID := map[string]CatalogEntry{}
+	for _, e := range DefaultCatalog() {
+		byID[e.ID] = e
+	}
+	if byID["weaponpaints"].HasConfig() != true {
+		t.Error("weaponpaints has a config file")
+	}
+	if byID["metamod"].HasConfig() != false {
+		t.Error("metamod has no JSON config the panel can edit")
 	}
 }
 
@@ -411,12 +556,13 @@ func TestResolveArtifactRejectsAmbiguity(t *testing.T) {
 
 	// AssetReject narrows the three assets down to the plain one.
 	entry, _ := Find(DefaultCatalog(), "matchzy")
-	name, url, version, err := in.resolveArtifact(context.Background(), entry)
+	name, urls, version, err := in.resolveArtifact(context.Background(), entry)
 	if err != nil {
 		t.Fatalf("resolve with reject: %v", err)
 	}
-	if name != "MatchZy-1.0.0.zip" || version != "1.0.0" || url != "http://x/c.zip" {
-		t.Fatalf("picked %q (%s) @ %q", name, url, version)
+	if name != "MatchZy-1.0.0.zip" || version != "1.0.0" ||
+		len(urls) != 1 || urls[0] != "http://x/c.zip" {
+		t.Fatalf("picked %q (%v) @ %q", name, urls, version)
 	}
 
 	// Without it, the ambiguity must be reported instead of guessed.
