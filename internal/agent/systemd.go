@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -152,4 +154,32 @@ func (s *Systemd) JournalTail(n int) ([]string, error) {
 	}
 	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
 	return lines, nil
+}
+
+// dropInDir is where systemd reads per-unit overrides from.
+func (s *Systemd) dropInDir() string {
+	return filepath.Join("/etc/systemd/system", s.serviceName+".service.d")
+}
+
+// WriteDropIn installs a systemd drop-in for the game unit and reloads the
+// daemon so it takes effect on the next start. The unit file the operator wrote
+// is never modified: deleting the drop-in restores the original launch line
+// exactly.
+func (s *Systemd) WriteDropIn(name, content string) error {
+	if name == "" || strings.ContainsAny(name, "/\\") || !strings.HasSuffix(name, ".conf") {
+		return fmt.Errorf("systemd: invalid drop-in name %q", name)
+	}
+	dir := s.dropInDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("systemd: create %s: %w", dir, err)
+	}
+	if err := atomicWrite(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		return fmt.Errorf("systemd: write drop-in: %w", err)
+	}
+	return s.DaemonReload()
+}
+
+// DaemonReload makes systemd re-read unit files.
+func (s *Systemd) DaemonReload() error {
+	return s.run(30*time.Second, "daemon-reload")
 }
