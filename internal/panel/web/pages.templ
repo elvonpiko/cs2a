@@ -37,7 +37,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 					<div class="btn-row">
 						<button class="btn primary" type="submit">Set password</button>
 					</div>
-					<p class="hint" style="margin-top:8px">Setting a password stops random players from joining. Clear it to make the server public again.</p>
+					<p class="hint">Setting a password stops random players from joining. Clear it to make the server public again.</p>
 				</div>
 			</form>
 		</div>
@@ -76,14 +76,14 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 			<form method="post" action="/access/whitelist" class="grow">
 				<label class="field">
 					<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
-					<textarea name="steamids" rows="9" class="mono" spellcheck="false" style="min-height:220px">{ v.WhitelistText }</textarea>
+					<textarea name="steamids" rows="9" class="mono tall" spellcheck="false">{ v.WhitelistText }</textarea>
 				</label>
 				<div class="card-foot">
 					<div class="btn-row">
 						<button class="btn primary" type="submit">Save whitelist</button>
 						<a class="btn ghost" href="/users">Pick from panel users</a>
 					</div>
-					<p class="hint" style="margin-top:8px">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
+					<p class="hint">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
 				</div>
 			</form>
 		</div>
@@ -109,7 +109,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 								<span class="faint">not linked</span>
 							}
 						</td>
-						<td style="text-align:right">
+						<td class="right">
 							if u.SteamID != "" {
 								<form method="post" action="/access/whitelist/add-user" class="mt0">
 									<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
@@ -171,7 +171,7 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 							<td>{ u.Username }</td>
 							<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
 							<td class="mono">{ u.SteamID }</td>
-							<td style="text-align:right">
+							<td class="right">
 								if u.ID != selfID {
 									<form method="post" action="/users/delete" class="mt0">
 										<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>

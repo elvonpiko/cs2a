@@ -1,16 +1,36 @@
 package web
 
-// Bare is the chrome-less layout (login page).
+// favicon is the cs2a reticle mark as an inline data URI (no extra request,
+// no binary asset to keep in sync with the logo).
+const favicon = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>" +
+	"<rect width='32' height='32' rx='8' fill='%230a0b0e'/>" +
+	"<g fill='none' stroke='%2348e0b0' stroke-width='2.4' stroke-linecap='round'>" +
+	"<circle cx='16' cy='16' r='9.5' stroke-dasharray='9.7 5.2' stroke-dashoffset='-2.6'/>" +
+	"<path d='M16 4.5v3M16 24.5v3M4.5 16h3M24.5 16h3' opacity='.5'/></g>" +
+	"<circle cx='16' cy='16' r='3' fill='%2348e0b0'/></svg>"
+
+// head holds the shared document head. scripts=false for the chrome-less pages
+// (login/setup) which need no htmx or app JS.
+templ head(title string, scripts bool) {
+	<meta charset="utf-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1"/>
+	<meta name="color-scheme" content="dark"/>
+	<meta name="theme-color" content="#0a0b0e"/>
+	<title>{ title } · cs2a</title>
+	<link rel="stylesheet" href="/static/cs2a.css"/>
+	<link rel="icon" href={ favicon }/>
+	if scripts {
+		<script src="/static/htmx.min.js" defer></script>
+		<script src="/static/app.js" defer></script>
+	}
+}
+
+// Bare is the chrome-less layout (login / first-run setup).
 templ Bare(title string, content templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
-			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<meta name="color-scheme" content="dark"/>
-			<title>{ title } · cs2a</title>
-			<link rel="stylesheet" href="/static/cs2a.css"/>
-			<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23ff7a45'/><text x='16' y='22' font-size='16' text-anchor='middle' font-family='sans-serif' font-weight='bold' fill='%231a1207'>C</text></svg>"/>
+			@head(title, false)
 		</head>
 		<body>
 			@content
@@ -23,29 +43,22 @@ templ Base(title string, nav *NavUser, content templ.Component) {
 	<!DOCTYPE html>
 	<html lang="en">
 		<head>
-			<meta charset="utf-8"/>
-			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<meta name="color-scheme" content="dark"/>
-			<title>{ title } · cs2a</title>
-			<link rel="stylesheet" href="/static/cs2a.css"/>
-			<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%23ff7a45'/><text x='16' y='22' font-size='16' text-anchor='middle' font-family='sans-serif' font-weight='bold' fill='%231a1207'>C</text></svg>"/>
-			<script src="/static/htmx.min.js" defer></script>
-			<script src="/static/app.js" defer></script>
+			@head(title, true)
 		</head>
 		<body>
 			<header class="topbar">
 				<div class="topbar-inner">
-					<a class="brand" href="/"><span class="logo">C</span> cs2a</a>
-					<nav class="nav-links">
+					@Brand()
+					<nav class="nav-links" aria-label="Main">
 						if nav != nil {
 							if nav.IsAdmin() {
-								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") }>Server</a>
-								<a href="/plugins" class={ "nav-js", templ.KV("active", nav.Active == "plugins") }>Plugins</a>
-								<a href="/access" class={ "nav-js", templ.KV("active", nav.Active == "access") }>Access</a>
-								<a href="/users" class={ "nav-js", templ.KV("active", nav.Active == "users") }>Users</a>
+								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") } aria-current={ ariaCurrent(nav.Active == "server") }>Server</a>
+								<a href="/plugins" class={ "nav-js", templ.KV("active", nav.Active == "plugins") } aria-current={ ariaCurrent(nav.Active == "plugins") }>Plugins</a>
+								<a href="/access" class={ "nav-js", templ.KV("active", nav.Active == "access") } aria-current={ ariaCurrent(nav.Active == "access") }>Access</a>
+								<a href="/users" class={ "nav-js", templ.KV("active", nav.Active == "users") } aria-current={ ariaCurrent(nav.Active == "users") }>Users</a>
 							} else {
-								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") }>Server</a>
-								<a href="/loadout" class={ "nav-js", templ.KV("active", nav.Active == "loadout") }>Loadout</a>
+								<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") } aria-current={ ariaCurrent(nav.Active == "server") }>Server</a>
+								<a href="/loadout" class={ "nav-js", templ.KV("active", nav.Active == "loadout") } aria-current={ ariaCurrent(nav.Active == "loadout") }>Loadout</a>
 							}
 						}
 					</nav>
@@ -63,7 +76,7 @@ templ Base(title string, nav *NavUser, content templ.Component) {
 			<main class="shell">
 				@content
 			</main>
-			<div id="toast" role="status"></div>
+			<div id="toast" role="status" aria-live="polite"></div>
 		</body>
 	</html>
 }

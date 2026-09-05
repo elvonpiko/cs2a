@@ -5,8 +5,8 @@ templ Login(errMsg string) {
 		<div class="login-blob b1"></div>
 		<div class="login-blob b2"></div>
 		<div class="login-card">
-			<div class="logo-big">C</div>
-			<h1>cs2a panel</h1>
+			@Mark("mark-big")
+			<h1>cs2a</h1>
 			<p class="sub">Sign in to manage your CS2 server</p>
 			if errMsg != "" {
 				<div class="error-box">{ errMsg }</div>
@@ -22,7 +22,7 @@ templ Login(errMsg string) {
 				</label>
 				<button class="btn primary" type="submit">Sign in</button>
 			</form>
-			<p class="login-foot">cs2a · lightweight CS2 server management</p>
+			<p class="login-foot">lightweight CS2 server management</p>
 		</div>
 	</div>
 }

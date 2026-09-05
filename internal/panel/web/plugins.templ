@@ -3,7 +3,7 @@ package web
 templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []PluginJobView) {
 	<div class="page-head">
 		<h1>Plugins</h1>
-		<p>Install and manage server-side components. Installs are resolved against live upstream releases.</p>
+		<p>Install and manage server-side components. Every install resolves against the live upstream release, so you always get the current version.</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {
@@ -32,9 +32,9 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []P
 				</div>
 				<p>{ e.Description }</p>
 				if len(e.Requires) > 0 {
-					<div class="row" style="gap:6px; flex-wrap: wrap;">
+					<div class="req">
 						for _, req := range e.Requires {
-							<span class="badge blue">requires { req }</span>
+							<span class="badge blue">needs { req }</span>
 						}
 					</div>
 				}
@@ -52,7 +52,7 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []P
 						</form>
 					}
 					if e.Homepage != "" {
-						<a class="btn ghost sm" href={ e.Homepage } target="_blank" rel="noopener">Docs</a>
+						<a class="btn ghost sm" href={ e.Homepage } target="_blank" rel="noopener noreferrer">Docs</a>
 					}
 				</div>
 			</div>
@@ -110,7 +110,7 @@ templ PluginJobs(jobs []PluginJobView) {
 templ PluginConfigPage(nav *NavUser, toast *Toast, v PluginConfigView) {
 	<div class="page-head">
 		<h1>{ v.Name } config</h1>
-		<p>Edits the plugin's JSON config on the server (validated, atomic write).</p>
+		<p>Edits the plugin's JSON config on the server — validated before an atomic write.</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {
@@ -138,7 +138,7 @@ templ PluginConfigPage(nav *NavUser, toast *Toast, v PluginConfigView) {
 					<button class="btn primary" type="submit">Save config</button>
 					<a class="btn ghost" href="/plugins">Back</a>
 				</div>
-				<p class="hint" style="margin-top:8px">Some plugins only read their config at server start — a restart may be required after saving.</p>
+				<p class="hint">Some plugins only read their config at server start — a restart may be required after saving.</p>
 			</div>
 		</form>
 	</div>

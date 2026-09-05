@@ -43,7 +43,7 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 			}
 			<p class="sub-label">Change map</p>
 			<form method="post" action="/do/map" class="row">
-				<select name="map" style="flex:1">
+				<select name="map" class="fill" aria-label="Map">
 					for _, m := range v.Maps {
 						<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
 					}
@@ -124,19 +124,19 @@ templ StatusCard(v ServerView) {
 			<span class={ "status-dot", templ.KV("on", v.Online), templ.KV("pulse", v.Online), templ.KV("off", !v.Online) }></span>
 			<div>
 				if v.Online {
-					<div style="font-weight:650">{ v.Hostname }</div>
+					<div class="status-name">{ v.Hostname }</div>
 					<div class="faint mono">{ v.ServiceSub }</div>
 				} else {
-					<div style="font-weight:650">Server is stopped</div>
+					<div class="status-name">Server is stopped</div>
 					<div class="faint">Start it to accept players</div>
 				}
 			</div>
 		</div>
 		<div class="map-banner">
-		<img src={ mapImage(v.Map) } alt={ v.Map } onerror="this.style.display='none'"/>
-		<span class="map-label mono">{ v.Map }</span>
-	</div>
-	<div class="stat-grid">
+			<img src={ mapImage(v.Map) } alt={ v.Map } onerror="this.style.display='none'"/>
+			<span class="map-label mono">{ v.Map }</span>
+		</div>
+		<div class="stat-grid">
 			<div class="stat">
 				<div class="k">Current map</div>
 				<div class="v mono">{ v.Map }</div>
