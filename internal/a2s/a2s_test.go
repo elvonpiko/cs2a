@@ -108,9 +108,9 @@ func (f *fakeA2S) playersResponse() []byte {
 		var dur [4]byte
 		binary.LittleEndian.PutUint32(dur[:], 0x42480000) // 50.0f
 		b = append(b, dur[:]...)
-		var sid [8]byte
-		binary.LittleEndian.PutUint64(sid[:], 0)
-		b = append(b, sid[:]...)
+		// No SteamID: A2S_PLAYER carries index, name, score and duration only.
+		// The fake used to append eight bytes for one, which hid a decoder bug —
+		// every player after the first was read from the wrong offset.
 	}
 	return b
 }
