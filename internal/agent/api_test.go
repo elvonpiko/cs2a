@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,7 +27,12 @@ func newTestAPI(t *testing.T) (*http.Client, *fakeService, string, Config) {
 
 	srv := &Server{cfg: cfg, sysd: svc, store: store}
 	wh := NewWhitelist(cfg)
-	inst := NewInstaller(cfg, store, DefaultCatalog(), nil)
+	// Give the installer a client that fails instantly: these tests must never
+	// reach the real internet, and the async-install test only cares that the
+	// request returns a job rather than blocking on a download.
+	gh := NewGHClient("")
+	gh.HTTP.Transport = offlineTransport{}
+	inst := NewInstaller(cfg, store, DefaultCatalog(), gh)
 	lo := NewLoadoutStore(cfg, store)
 	t.Cleanup(lo.Close)
 	api := NewAPI(cfg, srv, wh, inst, lo)
@@ -36,6 +42,13 @@ func newTestAPI(t *testing.T) (*http.Client, *fakeService, string, Config) {
 
 	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
 	return client, svc, ts.URL, cfg
+}
+
+// offlineTransport refuses every outbound request.
+type offlineTransport struct{}
+
+func (offlineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return nil, errors.New("network disabled in tests")
 }
 
 type authTransport struct {
@@ -210,6 +223,43 @@ func TestAPIPluginsList(t *testing.T) {
 	list, _ := out["plugins"].([]any)
 	if len(list) < 4 {
 		t.Fatalf("plugins = %d entries", len(list))
+	}
+}
+
+// An unknown plugin id must 404 rather than start a job, and an async install
+// must answer immediately with a job the caller can poll.
+func TestAPIPluginInstallAsyncJob(t *testing.T) {
+	client, _, base, _ := newTestAPI(t)
+	resp, _ := doJSON(t, client, "POST", base, "/api/v1/plugins/nope/install", map[string]any{"async": true})
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown plugin: %d", resp.StatusCode)
+	}
+
+	// metamod's download will fail (no network in tests) — what matters is
+	// that the request returns at once with a job id and the job settles.
+	resp, out := doJSON(t, client, "POST", base, "/api/v1/plugins/metamod/install", map[string]any{"async": true})
+	if resp.StatusCode != 202 {
+		t.Fatalf("async install: %d %v", resp.StatusCode, out)
+	}
+	id, _ := out["id"].(string)
+	if id == "" || out["status"] != "running" {
+		t.Fatalf("job = %v", out)
+	}
+	if out["target"] != "metamod" || out["label"] != "Metamod:Source" {
+		t.Fatalf("job target/label = %v", out)
+	}
+
+	resp, out = doJSON(t, client, "GET", base, "/api/v1/jobs/"+id, nil)
+	if resp.StatusCode != 200 || out["id"] != id {
+		t.Fatalf("job status: %d %v", resp.StatusCode, out)
+	}
+	resp, out = doJSON(t, client, "GET", base, "/api/v1/jobs", nil)
+	jobs, _ := out["jobs"].([]any)
+	if resp.StatusCode != 200 || len(jobs) != 1 {
+		t.Fatalf("job list: %d %v", resp.StatusCode, out)
+	}
+	if resp, _ := doJSON(t, client, "GET", base, "/api/v1/jobs/does-not-exist", nil); resp.StatusCode != 404 {
+		t.Fatalf("unknown job: %d", resp.StatusCode)
 	}
 }
 

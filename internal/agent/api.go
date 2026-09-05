@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,11 +17,12 @@ type API struct {
 	wh      *Whitelist
 	inst    *Installer
 	loadout *LoadoutStore
+	jobs    *Jobs
 }
 
 // NewAPI wires the HTTP API.
 func NewAPI(cfg Config, srv *Server, wh *Whitelist, inst *Installer, loadout *LoadoutStore) *API {
-	return &API{cfg: cfg, server: srv, wh: wh, inst: inst, loadout: loadout}
+	return &API{cfg: cfg, server: srv, wh: wh, inst: inst, loadout: loadout, jobs: NewJobs()}
 }
 
 // Handler builds the agent's http.Handler.
@@ -47,6 +50,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/plugins", auth(a.handlePlugins))
 	mux.HandleFunc("POST /api/v1/plugins/{id}/install", auth(a.handlePluginInstall))
 	mux.HandleFunc("DELETE /api/v1/plugins/{id}", auth(a.handlePluginUninstall))
+	mux.HandleFunc("GET /api/v1/jobs", auth(a.handleListJobs))
+	mux.HandleFunc("GET /api/v1/jobs/{id}", auth(a.handleGetJob))
 	mux.HandleFunc("GET /api/v1/whitelist", auth(a.handleGetWhitelist))
 	mux.HandleFunc("PUT /api/v1/whitelist", auth(a.handlePutWhitelist))
 	mux.HandleFunc("PUT /api/v1/whitelist/enabled", auth(a.handlePutWhitelistEnabled))
@@ -60,25 +65,13 @@ func (a *API) Handler() http.Handler {
 
 func (a *API) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tok := r.Header.Get("Authorization")
-		tok = strings.TrimPrefix(tok, "Bearer ")
-		if tok == "" || subtleConstantCompare(tok, a.cfg.Token) != true {
+		tok := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+		if tok == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(a.cfg.Token)) != 1 {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)
 	}
-}
-
-func subtleConstantCompare(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var v byte
-	for i := 0; i < len(a); i++ {
-		v |= a[i] ^ b[i]
-	}
-	return v == 0
 }
 
 // --- handlers ---------------------------------------------------------
@@ -239,14 +232,44 @@ func (a *API) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {
 		Force bool `json:"force"`
+		// Async starts a background job and returns immediately with its id.
+		// The panel uses this so a multi-minute download never rides on a
+		// single HTTP request (which any reverse proxy is free to cut).
+		Async bool `json:"async"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
-	res, err := a.inst.Install(r.Context(), id, req.Force)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+	entry, ok := Find(a.inst.catalog, id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown plugin "+id)
 		return
 	}
-	writeJSON(w, http.StatusOK, res)
+	if !req.Async {
+		res, err := a.inst.Install(r.Context(), id, req.Force)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+		return
+	}
+	force := req.Force
+	job, err := a.jobs.Start("install", id, entry.Name, func(ctx context.Context, progress func(string)) (*InstallResult, error) {
+		res, err := a.inst.InstallProgress(ctx, id, force, progress)
+		if err != nil {
+			return nil, err
+		}
+		return &res, nil
+	})
+	if err != nil {
+		var busy *ErrBusy
+		if errors.As(err, &busy) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 func (a *API) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
@@ -260,6 +283,19 @@ func (a *API) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *API) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": a.jobs.List()})
+}
+
+func (a *API) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	job, ok := a.jobs.Get(r.PathValue("id"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "unknown job")
+		return
+	}
+	writeJSON(w, http.StatusOK, job)
 }
 
 func (a *API) handleGetWhitelist(w http.ResponseWriter, r *http.Request) {
