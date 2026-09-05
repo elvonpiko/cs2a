@@ -198,15 +198,22 @@ func (s *Server) ChangeMap(ctx context.Context, mapName string) error {
 	if !found {
 		return fmt.Errorf("map: %q is not installed", mapName)
 	}
-	return s.rconExec(fmt.Sprintf("changelevel %s", mapName))
+	return s.rconFire(fmt.Sprintf("changelevel %s", mapName))
 }
 
-// ChangeMapForce skips local validation (workshop maps).
+// reWorkshopID matches a bare workshop file id, which needs
+// host_workshop_map instead of changelevel.
+var reWorkshopID = regexp.MustCompile(`^[0-9]{6,20}$`)
+
+// ChangeMapForce skips local validation (workshop maps and collection ids).
 func (s *Server) ChangeMapForce(mapName string) error {
 	if !reMapName.MatchString(mapName) {
 		return fmt.Errorf("map: invalid map name %q", mapName)
 	}
-	return s.rconExec(fmt.Sprintf("changelevel %s", mapName))
+	if reWorkshopID.MatchString(mapName) {
+		return s.rconFire(fmt.Sprintf("host_workshop_map %s", mapName))
+	}
+	return s.rconFire(fmt.Sprintf("changelevel %s", mapName))
 }
 
 // ManagedSettings returns the current cs2a-managed server.cfg settings.
@@ -262,6 +269,13 @@ func (s *Server) currentSettingsSans(name string) []cs2.CFGSetting {
 	return out
 }
 
+// ExecQuiet runs a command and ignores the result. Used for best-effort
+// plugin nudges (e.g. wl_reload) where "the plugin is not installed" and
+// "RCON is down" are both acceptable outcomes.
+func (s *Server) ExecQuiet(command string) error {
+	return s.rconFire(command)
+}
+
 func (s *Server) rconExec(command string) error {
 	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
 	if err != nil {
@@ -269,5 +283,19 @@ func (s *Server) rconExec(command string) error {
 	}
 	defer c.Close()
 	_, err = c.Exec(command)
+	return err
+}
+
+// rconFire sends a command that makes the server unresponsive while it runs
+// (changelevel, host_workshop_map). The server frequently never answers those,
+// so a missing reply is treated as success — the panel must not surface a
+// bogus "timeout" for an operation that actually started.
+func (s *Server) rconFire(command string) error {
+	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_, err = c.Fire(command, 2*time.Second)
 	return err
 }

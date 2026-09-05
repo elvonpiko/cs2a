@@ -47,6 +47,11 @@ type Client struct {
 	// nextID is the packet id for the next outgoing request.
 	nextID int32
 
+	// ExecTimeout bounds how long Exec waits for the *first* response packet.
+	// It must be generous: commands such as `changelevel` block the server
+	// while it loads the next map, so the reply can take seconds.
+	ExecTimeout time.Duration
+
 	// ExecReadIdle is how long Exec waits for a *further* packet after the
 	// first one before assuming the response is complete. Servers may answer
 	// long commands with several packets followed by an empty terminator.
@@ -63,6 +68,7 @@ func Dial(addr, password string, timeout time.Duration) (*Client, error) {
 	c := &Client{
 		conn:         conn,
 		nextID:       1,
+		ExecTimeout:  20 * time.Second,
 		ExecReadIdle: 350 * time.Millisecond,
 	}
 	c.setDeadline(timeout)
@@ -112,7 +118,13 @@ func (c *Client) Exec(cmd string) (string, error) {
 	var out []byte
 	packets := 0
 	for packets < 16 {
-		c.setDeadline(c.ExecReadIdle)
+		// The first packet may take a while (map changes stall the server);
+		// once the response has started, a short idle window ends it.
+		if packets == 0 {
+			c.setDeadline(c.execTimeout())
+		} else {
+			c.setDeadline(c.ExecReadIdle)
+		}
 		p, err := c.readPacket()
 		if err != nil {
 			// An idle timeout after at least one packet means we have the
@@ -135,8 +147,41 @@ func (c *Client) Exec(cmd string) (string, error) {
 	return string(out), nil
 }
 
+// Fire sends a command without requiring the server to answer. Commands such
+// as `changelevel` stall the game server while it loads, and CS2 may close the
+// RCON connection instead of replying — for those, a missing reply is success,
+// not an error. Only a write failure (or an authenticated-but-broken socket) is
+// reported. Any output that does arrive within grace is returned.
+func (c *Client) Fire(cmd string, grace time.Duration) (string, error) {
+	reqID := c.nextID
+	c.nextID++
+	if err := c.writePacket(reqID, typeServerDataExecCommand, cmd); err != nil {
+		return "", err
+	}
+	if grace <= 0 {
+		return "", nil
+	}
+	c.setDeadline(grace)
+	p, err := c.readPacket()
+	if err != nil {
+		return "", nil // no (or truncated) reply is expected for these commands
+	}
+	if p.typ != typeServerDataResponseValue || p.id != reqID {
+		return "", nil
+	}
+	return string(p.body), nil
+}
+
 // Close closes the underlying connection.
 func (c *Client) Close() error { return c.conn.Close() }
+
+// execTimeout is ExecTimeout with a safe default for zero-valued clients.
+func (c *Client) execTimeout() time.Duration {
+	if c.ExecTimeout > 0 {
+		return c.ExecTimeout
+	}
+	return 20 * time.Second
+}
 
 type packet struct {
 	id   int32
