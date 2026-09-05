@@ -36,6 +36,35 @@ func patchGameinfoMetamod(path string) error {
 	return nil
 }
 
+// unpatchGameinfoMetamod removes the metamod SearchPath line again. Leaving it
+// behind after uninstalling Metamod:Source makes the engine complain about a
+// missing search path on every boot, and the panel offered no way to undo it.
+// Idempotent, and a missing gameinfo.gi is not an error (the game may be gone).
+func unpatchGameinfoMetamod(path string) error {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("gameinfo: read %s: %w", path, err)
+	}
+	content := string(raw)
+	if !strings.Contains(content, "csgo/addons/metamod") {
+		return nil
+	}
+	// Drop only whole lines whose value is the metamod search path, so an
+	// operator's own comment mentioning metamod survives.
+	reLine := regexp.MustCompile(`(?m)^[ \t]*Game[ \t]+csgo/addons/metamod[ \t]*\r?\n`)
+	out := reLine.ReplaceAllString(content, "")
+	if out == content {
+		return nil
+	}
+	if err := atomicWrite(path, []byte(out), 0o644); err != nil {
+		return fmt.Errorf("gameinfo: write: %w", err)
+	}
+	return nil
+}
+
 // patchCoreGuidelines sets FollowCS2ServerGuidelines=false in cssharp's
 // core.json (required for skin plugins to apply cosmetics). Creates a minimal
 // file if cssharp has not generated one yet (it merges on next boot).

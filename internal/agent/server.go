@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,6 +56,9 @@ type FullStatus struct {
 	Info    *a2s.Info     `json:"info,omitempty"` // A2S_INFO (may be nil when stopped)
 	Rcon    *cs2.Status   `json:"rcon,omitempty"` // RCON status (players, ids)
 	Note    string        `json:"note,omitempty"` // non-fatal query problems
+	// Diag explains an unreachable RCON and what would fix it. Present only
+	// when the server is running but RCON did not answer.
+	Diag *RCONDiagnosis `json:"diag,omitempty"`
 }
 
 // Status composes systemd + A2S + RCON state. Individual query failures are
@@ -80,8 +84,21 @@ func (s *Server) Status(ctx context.Context) FullStatus {
 	} else {
 		out.Info = &info
 	}
-	if st, err := s.queryRCONStatus(); err != nil {
-		out.Note = joinNotes(out.Note, "rcon: "+err.Error())
+	if st, err := s.queryRCONStatus(ctx); err != nil {
+		// A raw "dial tcp 127.0.0.1:27015: connect: connection refused" is
+		// what the panel used to show. Work out the actual cause instead, so
+		// the UI can offer the fix rather than the symptom.
+		diag := s.DiagnoseRCON()
+		if !diag.OK && diag.Reason != "" {
+			out.Diag = &diag
+			out.Note = joinNotes(out.Note, "rcon: "+diag.Reason)
+		} else {
+			out.Note = joinNotes(out.Note, "rcon: "+err.Error())
+		}
+		// A partial answer is still worth publishing: the note explains it.
+		if len(st.Players) > 0 || st.Hostname != "" || st.Map != "" {
+			out.Rcon = &st
+		}
 	} else {
 		out.Rcon = &st
 	}
@@ -96,41 +113,60 @@ func joinNotes(a, b string) string {
 }
 
 func (s *Server) queryA2S(ctx context.Context) (a2s.Info, error) {
+	// The socket timeout is derived from the caller's budget: a fixed 3 s
+	// timeout with a 4 s context let one slow read run past the deadline, and
+	// the status request could overrun the panel's own 15 s limit once the RCON
+	// leg was added.
+	cctx, cancel := context.WithTimeout(ctx, a2sQueryBudget)
+	defer cancel()
 	var info a2s.Info
-	c, err := a2s.Dial(s.cfg.A2SAddr, 3*time.Second)
+	c, err := a2s.Dial(s.cfg.A2SAddr, a2sQueryBudget)
 	if err != nil {
 		return info, err
 	}
 	defer c.Close()
-	cctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
 	return c.Info(cctx)
 }
 
-func (s *Server) queryRCONStatus() (cs2.Status, error) {
+// a2sQueryBudget bounds the whole A2S leg of a status query, challenge round
+// trips included.
+const a2sQueryBudget = 3 * time.Second
+
+func (s *Server) queryRCONStatus(ctx context.Context) (cs2.Status, error) {
 	var st cs2.Status
 	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
 	if err != nil {
 		return st, err
 	}
 	defer c.Close()
-	out, err := c.Exec("status")
+	// A hibernating or map-loading server can hold a `status` for the client's
+	// full 20 s budget. Bounding it by the caller's context means a cancelled
+	// page request stops the wait instead of pinning the agent.
+	cctx, cancel := context.WithTimeout(ctx, rconStatusBudget)
+	defer cancel()
+	out, err := c.ExecContext(cctx, "status")
 	if err != nil {
-		return st, err
+		// A truncated answer still carries the fields that did arrive; showing
+		// them beats an empty page, and the note reports the truncation.
+		if out == "" || !errors.Is(err, rcon.ErrTruncated) {
+			return st, err
+		}
+		return cs2.ParseStatus(out), err
 	}
 	return cs2.ParseStatus(out), nil
 }
 
-// Start starts the game server unit.
-func (s *Server) Start() error { return s.sysd.Start() }
+// rconStatusBudget bounds the RCON leg of a status query.
+const rconStatusBudget = 6 * time.Second
 
-// Stop stops the game server unit.
-func (s *Server) Stop() error { return s.sysd.Stop() }
-
-// Restart restarts the game server unit.
-func (s *Server) Restart() error { return s.sysd.Restart() }
+// Lifecycle actions live in control.go: they must verify the unit actually
+// reached the requested state, which a bare systemctl call cannot do.
 
 // Exec runs a raw server console command via RCON (admin-only surface).
+//
+// A truncated answer is returned together with its error: for the console the
+// partial text is the useful part, and the caller labels it as incomplete rather
+// than presenting half a `cvarlist` as the whole thing.
 func (s *Server) Exec(ctx context.Context, command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" || len(command) > 500 {
@@ -138,10 +174,10 @@ func (s *Server) Exec(ctx context.Context, command string) (string, error) {
 	}
 	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
 	if err != nil {
-		return "", err
+		return "", s.rconDialError(err)
 	}
 	defer c.Close()
-	return c.Exec(command)
+	return c.ExecContext(ctx, command)
 }
 
 var reMapName = regexp.MustCompile(`^[a-z0-9_\-]{2,64}$`)
@@ -228,6 +264,19 @@ func (s *Server) ManagedSettings() ([]cs2.CFGSetting, error) {
 	return cs2.ExtractManagedBlock(content), nil
 }
 
+// ManagedBlockWarning reports a server.cfg that cs2a can write to but cannot
+// fully control — today that means a duplicate managed block, whose second copy
+// overrides everything the panel writes into the first. Returning it as a
+// warning keeps the save working while telling the operator why the server may
+// not match the UI.
+func (s *Server) ManagedBlockWarning() string {
+	content, err := cs2.LoadServerCFG(s.cfg.CFGDir())
+	if err != nil {
+		return ""
+	}
+	return cs2.ManagedBlockConflict(content)
+}
+
 // ApplyManagedSettings writes the managed block into server.cfg and applies
 // each cvar live over RCON (best-effort).
 func (s *Server) ApplyManagedSettings(ctx context.Context, settings []cs2.CFGSetting) error {
@@ -240,11 +289,42 @@ func (s *Server) ApplyManagedSettings(ctx context.Context, settings []cs2.CFGSet
 	if err := cs2.SaveServerCFG(s.cfg.CFGDir(), cs2.ApplyManagedBlock(content, settings)); err != nil {
 		return err
 	}
-	// apply live; failure to reach RCON is not fatal for persistence
-	for _, set := range settings {
-		_ = s.rconExec(fmt.Sprintf("%s %q", set.Name, set.Value))
-	}
+	s.pushSettingsLive(ctx, settings)
 	return nil
+}
+
+// pushSettingsLive applies the saved cvars to the running server so the operator
+// does not have to restart. Reaching RCON is best-effort — the file is the
+// source of truth — but the work is done over ONE connection: dialling and
+// authenticating per cvar meant a 12-setting save opened 12 sockets, and each
+// `rcon_password` change in the batch dropped the connections still in flight.
+func (s *Server) pushSettingsLive(ctx context.Context, settings []cs2.CFGSetting) {
+	live := make([]cs2.CFGSetting, 0, len(settings))
+	for _, set := range settings {
+		// A bare `mp_autokick` line is a query, not an assignment; pushing it
+		// as `mp_autokick ""` would set the cvar to 0.
+		if !set.Bare {
+			live = append(live, set)
+		}
+	}
+	if len(live) == 0 {
+		return
+	}
+	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+	cctx, cancel := context.WithTimeout(ctx, time.Duration(len(live))*time.Second+5*time.Second)
+	defer cancel()
+	for _, set := range live {
+		if cctx.Err() != nil {
+			return
+		}
+		if _, err := c.ExecContext(cctx, cs2.CvarCommand(set.Name, set.Value)); err != nil {
+			return // a dead connection will not revive for the next cvar
+		}
+	}
 }
 
 // SetPassword is a convenience wrapper: sets (or clears) sv_password.
@@ -276,16 +356,6 @@ func (s *Server) ExecQuiet(command string) error {
 	return s.rconFire(command)
 }
 
-func (s *Server) rconExec(command string) error {
-	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
-	if err != nil {
-		return err
-	}
-	defer c.Close()
-	_, err = c.Exec(command)
-	return err
-}
-
 // rconFire sends a command that makes the server unresponsive while it runs
 // (changelevel, host_workshop_map). The server frequently never answers those,
 // so a missing reply is treated as success — the panel must not surface a
@@ -293,9 +363,24 @@ func (s *Server) rconExec(command string) error {
 func (s *Server) rconFire(command string) error {
 	c, err := rcon.Dial(s.cfg.RCONAddr, s.cfg.RCONPassword, 5*time.Second)
 	if err != nil {
-		return err
+		return s.rconDialError(err)
 	}
 	defer c.Close()
 	_, err = c.Fire(command, 2*time.Second)
 	return err
+}
+
+// rconDialError replaces a bare socket error with the diagnosed cause. The
+// operator who saw "rcon: dial 127.0.0.1:27015: connect: connection refused"
+// had no way to know the game server was bound elsewhere or started without
+// -usercon; that is exactly what the diagnosis reports.
+func (s *Server) rconDialError(err error) error {
+	d := s.DiagnoseRCON()
+	if d.OK || d.Reason == "" {
+		return err
+	}
+	if d.Fix != "" {
+		return fmt.Errorf("%s — %s", d.Reason, d.Fix)
+	}
+	return errors.New(d.Reason)
 }

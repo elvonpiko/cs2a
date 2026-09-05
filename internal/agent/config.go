@@ -23,6 +23,12 @@ type Config struct {
 	DBPath       string `json:"db_path"`       // agent sqlite db
 	PluginCache  string `json:"plugin_cache"`  // download cache dir
 	WPDsn        string `json:"wp_dsn"`        // optional WeaponPaints MySQL DSN (loadout sync)
+	GitHubToken  string `json:"github_token"`  // optional, raises the GitHub API rate limit
+
+	// path is where this config was loaded from, so corrections the agent
+	// works out at runtime (e.g. the real RCON address of an adopted server)
+	// survive a restart. Empty for configs built in code or in tests.
+	path string
 }
 
 // Defaults matching the bootstrap installer.
@@ -46,7 +52,8 @@ func DefaultConfig() Config {
 }
 
 // LoadConfig reads a JSON config file. Environment variables override file
-// values (CS2A_AGENT_TOKEN, CS2A_AGENT_CS2_DIR, CS2A_AGENT_RCON_PASSWORD).
+// values (CS2A_AGENT_TOKEN, CS2A_AGENT_CS2_DIR, CS2A_AGENT_RCON_PASSWORD,
+// GITHUB_TOKEN).
 func LoadConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
 	if path != "" {
@@ -57,6 +64,7 @@ func LoadConfig(path string) (Config, error) {
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return cfg, fmt.Errorf("agent: parse config %s: %w", path, err)
 		}
+		cfg.path = path
 	}
 	if v := os.Getenv("CS2A_AGENT_TOKEN"); v != "" {
 		cfg.Token = v
@@ -67,10 +75,29 @@ func LoadConfig(path string) (Config, error) {
 	if v := os.Getenv("CS2A_AGENT_RCON_PASSWORD"); v != "" {
 		cfg.RCONPassword = v
 	}
+	if cfg.GitHubToken == "" {
+		cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// Persist writes the config back to the file it was loaded from. Values the
+// agent corrects at runtime (the RCON address of a server whose launch line
+// disagreed with the installer's guess) must survive a restart, or the panel
+// would break again on the next boot.
+func (c *Config) Persist() error {
+	if c.path == "" {
+		return nil // nothing to write back to (tests, env-only configs)
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	// 0600: the file holds the agent token and the RCON password.
+	return atomicWrite(c.path, append(b, '\n'), 0o600)
 }
 
 // Validate checks the minimal set of required fields.

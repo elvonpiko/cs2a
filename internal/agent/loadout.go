@@ -79,7 +79,15 @@ func (l *LoadoutStore) Get(steamid string) (Loadout, error) {
 	return lo, nil
 }
 
-// Set persists and best-effort syncs to WeaponPaints.
+// Set persists the selection, then syncs it into WeaponPaints' database.
+//
+// A sync failure is reported as a warning, not an error: the local write already
+// succeeded, so answering "Save failed" would be wrong twice over — the panel
+// would show the selection it had just stored as rejected, and the player would
+// retry a save that cannot fix a database problem. The common causes are a
+// WeaponPaints database that is unreachable and tables that do not exist yet
+// (the plugin creates them the first time it loads), and both need an admin,
+// not a retry.
 func (l *LoadoutStore) Set(steamid string, lo Loadout) error {
 	if steamid == "" {
 		return fmt.Errorf("loadout: empty steamid")
@@ -93,10 +101,29 @@ func (l *LoadoutStore) Set(steamid string, lo Loadout) error {
 	}
 	if l.wp != nil {
 		if err := l.syncWP(steamid, lo); err != nil {
-			return fmt.Errorf("loadout: weaponpaints sync: %w", err)
+			return warnf("saved, but the WeaponPaints database did not accept it: %v", wpSyncHint(err))
 		}
 	}
 	return nil
+}
+
+// wpSyncHint turns the driver's error into something an admin can act on.
+// "Error 1146 (42S02): Table 'cs2.wp_player_knife' doesn't exist" is accurate
+// and useless; the tables are created by the plugin on its first successful
+// load, so the fix is to start the server with WeaponPaints configured.
+func wpSyncHint(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "1146") || strings.Contains(msg, "doesn't exist"):
+		return "its tables do not exist yet — start the server once with WeaponPaints installed and its database credentials set, and it will create them"
+	case strings.Contains(msg, "1045") || strings.Contains(msg, "Access denied"):
+		return "the database rejected the credentials in wp_dsn"
+	case strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "i/o timeout") || strings.Contains(msg, "dial tcp"):
+		return "the database is not reachable from this server (check wp_dsn and that MariaDB is running)"
+	default:
+		return msg
+	}
 }
 
 // syncWP writes wp_player_knife / wp_player_gloves / wp_player_agents rows.
@@ -233,5 +260,13 @@ func (in *Installer) PutPluginConfig(id string, raw []byte) error {
 	if err := enc.Encode(doc); err != nil {
 		return err
 	}
-	return atomicWrite(path, buf.Bytes(), 0o644)
+	if err := atomicWrite(path, buf.Bytes(), 0o644); err != nil {
+		return err
+	}
+	// atomicWrite replaces the file, so a config the game user owned would come
+	// back owned by root (the agent) and the plugin could no longer update it.
+	if err := in.alignAbsToGameOwner(dirOf(path), path); err != nil {
+		return fmt.Errorf("plugins: config saved but not writable by the game user: %w", err)
+	}
+	return nil
 }

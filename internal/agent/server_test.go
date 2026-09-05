@@ -19,13 +19,18 @@ type fakeService struct {
 	active  bool
 	enabled bool
 	ops     []string
+	// dieOnStart makes the unit exit right after a start/restart, the way a
+	// CS2 server with bad launch args does.
+	dieOnStart bool
+	// journal is returned by JournalTail.
+	journal []string
 }
 
 func (f *fakeService) Start() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ops = append(f.ops, "start")
-	f.active = true
+	f.active = !f.dieOnStart
 	return nil
 }
 func (f *fakeService) Stop() error {
@@ -39,6 +44,7 @@ func (f *fakeService) Restart() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.ops = append(f.ops, "restart")
+	f.active = !f.dieOnStart
 	return nil
 }
 func (f *fakeService) IsActive() (bool, error) {
@@ -55,6 +61,14 @@ func (f *fakeService) UptimeSeconds() (float64, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return 3600, f.active
+}
+func (f *fakeService) JournalTail(int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.journal == nil {
+		return []string{"cs2-server: exited with code 1"}, nil
+	}
+	return append([]string(nil), f.journal...), nil
 }
 
 // fakeRCON is a minimal RCON server that records executed commands.
@@ -137,6 +151,14 @@ func (f *fakeRCON) serve(conn net.Conn, responses map[string]string) {
 			f.commands = append(f.commands, body)
 			f.mu.Unlock()
 			f.write(conn, id, 0, responses[body])
+		case 0:
+			// The client's end-of-response marker. A real SRCDS mirrors the
+			// bogus request back, which is how a client knows a split response
+			// has finished; answering it here keeps these tests on the same code
+			// path as production instead of the slower idle-window fallback.
+			if authed {
+				f.write(conn, id, 0, "")
+			}
 		}
 	}
 }
@@ -212,20 +234,75 @@ func TestServerStatusRunning(t *testing.T) {
 	}
 }
 
+// A lifecycle action must confirm the unit reached the requested state, and say
+// what happened. Reporting success on the strength of systemctl's exit code is
+// what left the operator unsure whether the buttons worked at all.
 func TestServerLifecycleActions(t *testing.T) {
 	srv, svc, _, _ := newTestServer(t, nil)
-	if err := srv.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.Restart(); err != nil {
-		t.Fatal(err)
-	}
-	if err := srv.Stop(); err != nil {
-		t.Fatal(err)
+	for _, tc := range []struct {
+		action Action
+		active bool
+	}{
+		{ActionStart, true},
+		{ActionRestart, true},
+		{ActionStop, false},
+	} {
+		res := srv.Control(t.Context(), tc.action)
+		if res.Failed {
+			t.Fatalf("%s failed: %+v", tc.action, res)
+		}
+		if res.Active != tc.active {
+			t.Fatalf("%s: active = %v, want %v", tc.action, res.Active, tc.active)
+		}
+		if res.Message == "" {
+			t.Fatalf("%s produced no operator message", tc.action)
+		}
 	}
 	ops := svc.ops
 	if len(ops) != 3 || ops[0] != "start" || ops[1] != "restart" || ops[2] != "stop" {
 		t.Fatalf("ops = %v", ops)
+	}
+}
+
+// A unit that exits immediately must be reported as a failure, with the journal
+// attached so the operator can see why.
+func TestServerControlDetectsUnitThatDies(t *testing.T) {
+	srv, svc, _, _ := newTestServer(t, nil)
+	svc.dieOnStart = true
+	svc.journal = []string{"cs2-server[42]: Fatal: could not bind port 27015"}
+
+	res := srv.Control(t.Context(), ActionStart)
+	if !res.Failed || res.Active {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(res.Log) == 0 || !strings.Contains(res.Log[0], "could not bind") {
+		t.Fatalf("journal not attached: %+v", res.Log)
+	}
+	if !strings.Contains(res.Message, "did not stay running") {
+		t.Fatalf("message = %q", res.Message)
+	}
+}
+
+// An unknown action is a programming error, not something to hand to systemd.
+func TestServerControlRejectsUnknownAction(t *testing.T) {
+	srv, svc, _, _ := newTestServer(t, nil)
+	res := srv.Control(t.Context(), Action("nuke"))
+	if !res.Failed {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(svc.ops) != 0 {
+		t.Fatalf("systemd was called: %v", svc.ops)
+	}
+}
+
+// Journal noise must not render as content: an empty log has to look empty.
+func TestFilterJournalNoise(t *testing.T) {
+	if got := filterJournalNoise([]string{"", "  ", "-- No entries --"}); got != nil {
+		t.Fatalf("got %v, want nil", got)
+	}
+	got := filterJournalNoise([]string{"", "real line", "-- No entries --"})
+	if len(got) != 1 || got[0] != "real line" {
+		t.Fatalf("got %v", got)
 	}
 }
 
@@ -366,6 +443,11 @@ func TestWhitelistEnableSwitch(t *testing.T) {
 		t.Fatalf("fresh state: on=%v err=%v", on, err)
 	}
 
+	// enforcement requires somebody on the list (see SetEnabled)
+	if _, err := w.Apply([]string{"[U:1:1234567]"}); err != nil {
+		t.Fatal(err)
+	}
+
 	// enabling with no config writes a usable default
 	if err := w.SetEnabled(true); err != nil {
 		t.Fatal(err)
@@ -398,6 +480,9 @@ func TestWhitelistEnableSwitch(t *testing.T) {
 func TestWhitelistEnablePreservesOperatorConfig(t *testing.T) {
 	_, _, _, cfg := newTestServer(t, nil)
 	w := NewWhitelist(cfg)
+	if _, err := w.Apply([]string{"[U:1:1234567]"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Dir(w.CorePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -424,5 +509,75 @@ func TestWhitelistEnablePreservesOperatorConfig(t *testing.T) {
 	}
 	if !strings.Contains(s, `"custom.txt"`) || !strings.Contains(s, `"LogToFile"`) {
 		t.Fatalf("operator settings lost:\n%s", s)
+	}
+}
+
+// Installing the whitelist plugin must not start enforcing. It used to write
+// Enable "1" while whitelist.txt did not exist yet, so the next restart rejected
+// every connection — installing a plugin locked the operator out of their own
+// server.
+func TestWhitelistInstallDoesNotEnforce(t *testing.T) {
+	_, _, _, cfg := newTestServer(t, nil)
+	w := NewWhitelist(cfg)
+	if err := writeWhitelistCoreCFG(w.CorePath()); err != nil {
+		t.Fatal(err)
+	}
+	on, err := w.Enabled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on {
+		raw, _ := os.ReadFile(w.CorePath())
+		t.Fatalf("a fresh install must not enforce the whitelist:\n%s", raw)
+	}
+	// The file the panel manages must still be named, so switching enforcement
+	// on later needs no hand-editing.
+	raw, _ := os.ReadFile(w.CorePath())
+	if !strings.Contains(string(raw), `"Filename"`) {
+		t.Fatalf("core.cfg must point at the managed list:\n%s", raw)
+	}
+}
+
+// Refusing to enforce an empty list is the agent's job, not just the panel's:
+// the panel hides the button, and this is what makes the rule hold for any
+// caller. The mirror case matters too — emptying the list while enforcement is
+// already on has exactly the same effect.
+func TestWhitelistRefusesEnforcingEmptyList(t *testing.T) {
+	_, _, _, cfg := newTestServer(t, nil)
+	w := NewWhitelist(cfg)
+	err := w.SetEnabled(true)
+	if err == nil {
+		t.Fatal("enforcing an empty whitelist must be refused")
+	}
+	if !strings.Contains(err.Error(), "empty whitelist") {
+		t.Fatalf("error should name the problem, got %v", err)
+	}
+	if on, _ := w.Enabled(); on {
+		t.Fatal("enforcement was switched on despite the refusal")
+	}
+	// Disabling is always allowed, even with nothing on the list.
+	if err := w.SetEnabled(false); err != nil {
+		t.Fatalf("disable must always work: %v", err)
+	}
+
+	// Now enforce properly, then try to empty the list.
+	if _, err := w.Apply([]string{"[U:1:1234567]"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Apply(nil); err == nil {
+		t.Fatal("clearing an enforced whitelist must be refused")
+	}
+	if ids, _ := w.Read(); len(ids) != 1 {
+		t.Fatalf("the list must be untouched, got %v", ids)
+	}
+	// With enforcement off, clearing it is fine.
+	if err := w.SetEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Apply(nil); err != nil {
+		t.Fatalf("clearing an unenforced list must work: %v", err)
 	}
 }

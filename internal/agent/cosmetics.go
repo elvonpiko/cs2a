@@ -42,18 +42,56 @@ type AgentEntry struct {
 // wp_player_skins; the panel needs both to render + write a selection.
 var glovePaintLookup = map[int]int{}
 
+// rawGlove is one entry of data/gloves.json.
+//
+// The field tags must match the file that is actually embedded. They used to
+// name cs2-WeaponPaints' upstream columns (weapon_defindex/paint_name), which
+// appear nowhere in data/gloves.json: every glove therefore decoded with
+// Defindex 0 and an empty name, hit the "defindex == 0" default branch, and the
+// loadout page rendered 95 identical "Default (no gloves)" options. Both
+// spellings are accepted so a catalog refreshed straight from upstream also
+// decodes.
 type rawGlove struct {
+	Defindex       int    `json:"defindex"`
 	WeaponDefindex int    `json:"weapon_defindex"`
 	Paint          any    `json:"paint"`
+	Name           string `json:"name"`
 	PaintName      string `json:"paint_name"`
 	Image          string `json:"image"`
 }
 
+// defindex returns whichever spelling the file used.
+func (g rawGlove) defindex() int {
+	if g.Defindex != 0 {
+		return g.Defindex
+	}
+	return g.WeaponDefindex
+}
+
+// label returns whichever spelling the file used.
+func (g rawGlove) label() string {
+	if g.Name != "" {
+		return g.Name
+	}
+	return g.PaintName
+}
+
+// rawAgent is one entry of data/agents.json. As with rawGlove, both the local
+// and the upstream name spellings are accepted.
 type rawAgent struct {
 	Team      int    `json:"team"`
 	Model     string `json:"model"`
+	Name      string `json:"name"`
 	AgentName string `json:"agent_name"`
 	Image     string `json:"image"`
+}
+
+// label returns whichever spelling the file used.
+func (a rawAgent) label() string {
+	if a.Name != "" {
+		return a.Name
+	}
+	return a.AgentName
 }
 
 // Gloves returns the glove catalog sorted by name (default first).
@@ -63,6 +101,7 @@ func Gloves() []GloveEntry {
 		return nil
 	}
 	out := make([]GloveEntry, 0, len(raw))
+	seenDefault := false
 	for _, g := range raw {
 		paint := 0
 		switch v := g.Paint.(type) {
@@ -72,19 +111,31 @@ func Gloves() []GloveEntry {
 			fmt.Sscanf(v, "%d", &paint)
 		}
 		// A glove selection is defindex + paint kit; the same defindex
-		// appears with many paints — keep the default/first paint per pair.
-		if g.WeaponDefindex == 0 {
+		// appears with many paints — each paint is its own choice.
+		if g.defindex() == 0 {
+			// Exactly one "no gloves" option, whatever the data contains.
+			if seenDefault {
+				continue
+			}
+			seenDefault = true
 			out = append(out, GloveEntry{Defindex: 0, Paint: 0, Name: "Default (no gloves)"})
 			continue
 		}
 		out = append(out, GloveEntry{
-			Defindex: g.WeaponDefindex,
+			Defindex: g.defindex(),
 			Paint:    paint,
-			Name:     g.PaintName,
+			Name:     g.label(),
 			Image:    gloveImage(g.Image),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	// Default first, then by name: an unnamed entry would otherwise sort to the
+	// top and look like the default.
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].Defindex == 0) != (out[j].Defindex == 0) {
+			return out[i].Defindex == 0
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 
@@ -95,10 +146,11 @@ func Agents() (tSide, ctSide []AgentEntry) {
 		return nil, nil
 	}
 	for _, a := range raw {
-		e := AgentEntry{Model: a.Model, Name: a.AgentName, Team: a.Team, Image: agentImage(a.Image)}
+		e := AgentEntry{Model: a.Model, Name: a.label(), Team: a.Team, Image: agentImage(a.Image)}
 		if a.Model == "null" || a.Model == "" {
 			e.Model = "" // default
 			e.Name = "Default (no agent)"
+			e.Image = ""
 		}
 		switch a.Team {
 		case 2:
@@ -107,9 +159,19 @@ func Agents() (tSide, ctSide []AgentEntry) {
 			ctSide = append(ctSide, e)
 		}
 	}
-	sort.Slice(tSide, func(i, j int) bool { return tSide[i].Name < tSide[j].Name })
-	sort.Slice(ctSide, func(i, j int) bool { return ctSide[i].Name < ctSide[j].Name })
+	sortAgents(tSide)
+	sortAgents(ctSide)
 	return tSide, ctSide
+}
+
+// sortAgents puts the default first and the rest in name order.
+func sortAgents(list []AgentEntry) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if (list[i].Model == "") != (list[j].Model == "") {
+			return list[i].Model == ""
+		}
+		return list[i].Name < list[j].Name
+	})
 }
 
 // gloveImage converts the plugin's absolute image URL to a local static path

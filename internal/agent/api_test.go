@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,12 @@ func (offlineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 type authTransport struct {
 	base  http.RoundTripper
 	token string
+}
+
+// newAuthClient builds a client that presents the agent token, for tests that
+// wire their own API instance instead of using newTestAPI.
+func newAuthClient(token string) *http.Client {
+	return &http.Client{Transport: authTransport{base: http.DefaultTransport, token: token}}
 }
 
 func (a authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -118,26 +125,47 @@ func TestAPIUnauthorizedWithoutToken(t *testing.T) {
 	}
 }
 
+// A lifecycle action must report the unit's real state, not just that
+// systemctl exited 0.
 func TestAPILifecycleAndStatus(t *testing.T) {
 	client, svc, base, _ := newTestAPI(t)
 
-	_, out := doJSON(t, client, "POST", base, "/api/v1/server/stop", nil)
-	if out["ok"] != true {
-		t.Fatalf("stop: %v", out)
+	resp, out := doJSON(t, client, "POST", base, "/api/v1/server/stop", nil)
+	if resp.StatusCode != 200 || out["failed"] == true || out["active"] != false {
+		t.Fatalf("stop: %d %v", resp.StatusCode, out)
 	}
 	if svc.active {
 		t.Fatal("service should be stopped")
 	}
-	_, out = doJSON(t, client, "POST", base, "/api/v1/server/start", nil)
-	if out["ok"] != true || !svc.active {
-		t.Fatalf("start: %v (active=%v)", out, svc.active)
+	resp, out = doJSON(t, client, "POST", base, "/api/v1/server/start", nil)
+	if resp.StatusCode != 200 || out["failed"] == true || out["active"] != true || !svc.active {
+		t.Fatalf("start: %d %v (active=%v)", resp.StatusCode, out, svc.active)
 	}
-	resp, out := doJSON(t, client, "GET", base, "/api/v1/status", nil)
+	resp, out = doJSON(t, client, "GET", base, "/api/v1/status", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("status code %d", resp.StatusCode)
 	}
 	if _, ok := out["service"]; !ok {
 		t.Fatalf("status missing service: %v", out)
+	}
+}
+
+// A unit that exits immediately after start must be reported as a failure —
+// the panel showed a cheerful "starting…" for a server that was already dead.
+func TestAPIStartReportsUnitThatDies(t *testing.T) {
+	client, svc, base, _ := newTestAPI(t)
+	svc.dieOnStart = true
+
+	resp, out := doJSON(t, client, "POST", base, "/api/v1/server/start", nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("want 409 for a unit that did not stay up, got %d: %v", resp.StatusCode, out)
+	}
+	if out["failed"] != true {
+		t.Fatalf("failed flag missing: %v", out)
+	}
+	msg, _ := out["message"].(string)
+	if !strings.Contains(msg, "did not stay running") {
+		t.Fatalf("unhelpful message: %q", msg)
 	}
 }
 
@@ -214,6 +242,41 @@ func TestAPIWhitelistRoundTrip(t *testing.T) {
 	}
 }
 
+// Enforcing an empty whitelist rejects every connection, including the
+// operator's, and the only way back would be editing files over SSH. The agent
+// refuses it regardless of what the caller sends.
+func TestAPIWhitelistRefusesEnforcingEmptyList(t *testing.T) {
+	client, _, base, _ := newTestAPI(t)
+	resp, out := doJSON(t, client, "PUT", base, "/api/v1/whitelist/enabled", map[string]any{"enabled": true})
+	if resp.StatusCode != 400 {
+		t.Fatalf("enforcing an empty whitelist: %d %v, want 400", resp.StatusCode, out)
+	}
+	msg, _ := out["error"].(string)
+	if !strings.Contains(msg, "empty whitelist") {
+		t.Fatalf("error should explain the refusal, got %q", msg)
+	}
+	// It must not have been switched on behind the refusal.
+	_, out = doJSON(t, client, "GET", base, "/api/v1/whitelist", nil)
+	if out["enabled"] != false {
+		t.Fatalf("enabled = %v after a refused change", out["enabled"])
+	}
+
+	// With an entry the same call succeeds.
+	if resp, out := doJSON(t, client, "PUT", base, "/api/v1/whitelist", map[string]any{
+		"steamids": []string{"76561197961500295"},
+	}); resp.StatusCode != 200 {
+		t.Fatalf("put whitelist: %d %v", resp.StatusCode, out)
+	}
+	if resp, out := doJSON(t, client, "PUT", base, "/api/v1/whitelist/enabled", map[string]any{"enabled": true}); resp.StatusCode != 200 {
+		t.Fatalf("enable with entries: %d %v", resp.StatusCode, out)
+	}
+	// Clearing the list while enforcement is on is allowed — it is the switch
+	// that is guarded, not the file — but turning it off always works.
+	if resp, out := doJSON(t, client, "PUT", base, "/api/v1/whitelist/enabled", map[string]any{"enabled": false}); resp.StatusCode != 200 {
+		t.Fatalf("disable: %d %v", resp.StatusCode, out)
+	}
+}
+
 func TestAPIPluginsList(t *testing.T) {
 	client, _, base, _ := newTestAPI(t)
 	resp, out := doJSON(t, client, "GET", base, "/api/v1/plugins", nil)
@@ -268,6 +331,55 @@ func TestAPIExec(t *testing.T) {
 	resp, out := doJSON(t, client, "POST", base, "/api/v1/server/exec", map[string]any{"command": "mp_warmuptime 5"})
 	if resp.StatusCode != 200 {
 		t.Fatalf("exec: %d %v", resp.StatusCode, out)
+	}
+}
+
+// The panel reads the journal through the agent so an operator can diagnose a
+// server that will not start without SSH access.
+func TestAPILogs(t *testing.T) {
+	client, svc, base, _ := newTestAPI(t)
+	svc.journal = []string{"cs2-server[42]: Server is hibernating", ""}
+
+	resp, out := doJSON(t, client, "GET", base, "/api/v1/server/logs?n=5", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("logs: %d %v", resp.StatusCode, out)
+	}
+	lines, _ := out["lines"].([]any)
+	if len(lines) != 1 || !strings.Contains(lines[0].(string), "hibernating") {
+		t.Fatalf("lines = %v", out)
+	}
+
+	// n must be sanitised, not trusted.
+	if resp, _ := doJSON(t, client, "GET", base, "/api/v1/server/logs?n=-3", nil); resp.StatusCode != 200 {
+		t.Fatalf("negative n: %d", resp.StatusCode)
+	}
+	if resp, _ := doJSON(t, client, "GET", base, "/api/v1/server/logs?n=abc", nil); resp.StatusCode != 200 {
+		t.Fatalf("non-numeric n: %d", resp.StatusCode)
+	}
+}
+
+// rcon-check reports the diagnosis; rcon-repair applies it. Both are what
+// replaced the bare "connection refused" the operator used to get.
+func TestAPIRCONCheckAndRepair(t *testing.T) {
+	client, _, base, _ := newTestAPI(t)
+
+	resp, out := doJSON(t, client, "GET", base, "/api/v1/server/rcon-check", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("rcon-check: %d %v", resp.StatusCode, out)
+	}
+	if _, ok := out["ok"]; !ok {
+		t.Fatalf("diagnosis has no ok field: %v", out)
+	}
+	// The fake unit reports no launch line, so nothing is repairable and the
+	// endpoint must say so rather than half-applying something.
+	resp, out = doJSON(t, client, "POST", base, "/api/v1/server/rcon-repair", nil)
+	if resp.StatusCode != 200 && resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("rcon-repair: %d %v", resp.StatusCode, out)
+	}
+	if resp.StatusCode == 200 {
+		if _, ok := out["applied"]; !ok {
+			t.Fatalf("repair response missing applied: %v", out)
+		}
 	}
 }
 
