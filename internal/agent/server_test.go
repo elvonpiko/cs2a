@@ -332,9 +332,12 @@ func TestWhitelistFile(t *testing.T) {
 	var lines []string
 	for sc.Scan() {
 		l := strings.TrimSpace(sc.Text())
-		if l != "" && !strings.HasPrefix(l, "#") {
-			lines = append(lines, l)
+		// the plugin accepts #, // and ; as comment markers
+		if l == "" || strings.HasPrefix(l, "#") ||
+			strings.HasPrefix(l, "//") || strings.HasPrefix(l, ";") {
+			continue
 		}
+		lines = append(lines, l)
 	}
 	if len(lines) != 2 {
 		t.Fatalf("file lines = %v", lines)
@@ -349,5 +352,77 @@ func TestWhitelistFile(t *testing.T) {
 	// invalid entry rejected
 	if _, err := w.Apply([]string{"not-a-steamid"}); err == nil {
 		t.Fatal("expected invalid steamid error")
+	}
+}
+
+// Enforcement lives in the plugin's core.cfg KeyValues file, not in a cvar.
+func TestWhitelistEnableSwitch(t *testing.T) {
+	_, _, _, cfg := newTestServer(t, nil)
+	w := NewWhitelist(cfg)
+
+	// no config yet => not enforcing, and no error
+	on, err := w.Enabled()
+	if err != nil || on {
+		t.Fatalf("fresh state: on=%v err=%v", on, err)
+	}
+
+	// enabling with no config writes a usable default
+	if err := w.SetEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	on, err = w.Enabled()
+	if err != nil || !on {
+		t.Fatalf("after enable: on=%v err=%v", on, err)
+	}
+	raw, _ := os.ReadFile(w.CorePath())
+	if !strings.Contains(string(raw), `"Filename"`) {
+		t.Fatalf("core.cfg missing Filename key:\n%s", raw)
+	}
+
+	// toggling off must preserve every other key and comment
+	if err := w.SetEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	on, _ = w.Enabled()
+	if on {
+		t.Fatal("still enforcing after disable")
+	}
+	raw2, _ := os.ReadFile(w.CorePath())
+	if !strings.Contains(string(raw2), `"Immunity"`) || !strings.Contains(string(raw2), "cs2a") {
+		t.Fatalf("other config content lost:\n%s", raw2)
+	}
+}
+
+// An operator's hand-written core.cfg must keep its own settings; only the
+// Enable value may change.
+func TestWhitelistEnablePreservesOperatorConfig(t *testing.T) {
+	_, _, _, cfg := newTestServer(t, nil)
+	w := NewWhitelist(cfg)
+	if err := os.MkdirAll(filepath.Dir(w.CorePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	custom := `"cs2whitelist"
+{
+	"Config"
+	{
+		"Enable"	"0"
+		"Filename"	"custom.txt"
+		"LogToFile"	"1"
+	}
+}
+`
+	if err := os.WriteFile(w.CorePath(), []byte(custom), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(w.CorePath())
+	s := string(raw)
+	if !strings.Contains(s, `"Enable"	"1"`) {
+		t.Fatalf("Enable not flipped:\n%s", s)
+	}
+	if !strings.Contains(s, `"custom.txt"`) || !strings.Contains(s, `"LogToFile"`) {
+		t.Fatalf("operator settings lost:\n%s", s)
 	}
 }

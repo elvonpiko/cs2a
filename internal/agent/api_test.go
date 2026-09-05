@@ -186,6 +186,19 @@ func TestAPIWhitelistRoundTrip(t *testing.T) {
 	if len(ids) != 1 || ids[0] != "76561197961500295" {
 		t.Fatalf("whitelist = %v", out)
 	}
+	// enforcement is reported separately and starts off
+	if out["enabled"] != false {
+		t.Fatalf("enabled = %v, want false before the switch is flipped", out["enabled"])
+	}
+
+	resp, out = doJSON(t, client, "PUT", base, "/api/v1/whitelist/enabled", map[string]any{"enabled": true})
+	if resp.StatusCode != 200 || out["enabled"] != true {
+		t.Fatalf("enable whitelist: %d %v", resp.StatusCode, out)
+	}
+	_, out = doJSON(t, client, "GET", base, "/api/v1/whitelist", nil)
+	if out["enabled"] != true {
+		t.Fatalf("enabled not persisted: %v", out)
+	}
 }
 
 func TestAPIPluginsList(t *testing.T) {
@@ -230,7 +243,7 @@ func TestAPILoadoutRoundTrip(t *testing.T) {
 }
 
 func TestCvarNameValidation(t *testing.T) {
-	valid := []string{"sv_password", "mp_maxrounds", "hostname", "mm_whitelist_enable", "a.b_c"}
+	valid := []string{"sv_password", "mp_maxrounds", "hostname", "sv_cheats", "a.b_c"}
 	invalid := []string{"", "1abc", "has space", "semi;colon", "quote\"x"}
 	for _, v := range valid {
 		if !reCvarName.MatchString(v) {

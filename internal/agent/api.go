@@ -49,6 +49,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/plugins/{id}", auth(a.handlePluginUninstall))
 	mux.HandleFunc("GET /api/v1/whitelist", auth(a.handleGetWhitelist))
 	mux.HandleFunc("PUT /api/v1/whitelist", auth(a.handlePutWhitelist))
+	mux.HandleFunc("PUT /api/v1/whitelist/enabled", auth(a.handlePutWhitelistEnabled))
 	mux.HandleFunc("GET /api/v1/loadout/{steamid}", auth(a.handleGetLoadout))
 	mux.HandleFunc("PUT /api/v1/loadout/{steamid}", auth(a.handlePutLoadout))
 	mux.HandleFunc("GET /api/v1/plugins/{id}/config", auth(a.handleGetPluginConfig))
@@ -270,7 +271,30 @@ func (a *API) handleGetWhitelist(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		ids = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"steamids": ids})
+	enabled, err := a.wh.Enabled()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"steamids": ids, "enabled": enabled})
+}
+
+// handlePutWhitelistEnabled flips enforcement in the plugin's core.cfg and
+// asks the plugin to reload it (best effort — RCON may be down).
+func (a *API) handlePutWhitelistEnabled(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json")
+		return
+	}
+	if err := a.wh.SetEnabled(req.Enabled); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_ = a.server.ExecQuiet("wl_reload")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": req.Enabled})
 }
 
 func (a *API) handlePutWhitelist(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +313,8 @@ func (a *API) handlePutWhitelist(w http.ResponseWriter, r *http.Request) {
 	if ids == nil {
 		ids = []string{}
 	}
+	// the plugin caches the file; ask it to reload (no-op when not installed)
+	_ = a.server.ExecQuiet("wl_reload")
 	writeJSON(w, http.StatusOK, map[string]any{"steamids": ids})
 }
 
