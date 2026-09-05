@@ -8,12 +8,16 @@
 # workflow's configure-pages step fails with "Get Pages site failed", and the
 # root install.sh URL above 404s because the branch build serves the repo tree
 # (scripts/install.sh) rather than the assembled public/ directory.
+#
+# Deploys from main only. The github-pages environment carries a deployment
+# branch policy allowing "main", so a run whose ref is a tag is rejected before
+# its first step — and because both push events fire together on a tagged push,
+# the tag run also cancelled the main run through the concurrency group.
 name: pages
 
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -23,7 +27,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
