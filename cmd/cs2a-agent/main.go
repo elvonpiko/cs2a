@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -21,7 +22,29 @@ import (
 
 func main() {
 	configPath := flag.String("config", "/etc/cs2a/agent.json", "path to agent.json")
+	check := flag.Bool("check", false, "validate the config file and exit")
 	flag.Parse()
+
+	// -check is the installer's config gate: the agent itself is the only
+	// thing that knows what a valid agent.json is, so bootstrap no longer has
+	// to shell out to python3 (and no longer skips the check when it is
+	// missing).
+	if *check {
+		cfg, err := agent.LoadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cs2a-agent: %v\n", err)
+			os.Exit(1)
+		}
+		// The install root is only checked here, never in LoadConfig: a running
+		// agent must still start with a broken path so the panel can explain
+		// the problem instead of the service simply being dead.
+		if _, err := os.Stat(filepath.Join(cfg.CSGODir(), "gameinfo.gi")); err != nil {
+			fmt.Fprintf(os.Stderr, "cs2a-agent: cs2_dir %s does not contain game/csgo/gameinfo.gi\n", cfg.CS2Dir)
+			os.Exit(1)
+		}
+		fmt.Printf("config ok: cs2_dir=%s service=%s rcon=%s\n", cfg.CS2Dir, cfg.ServiceName, cfg.RCONAddr)
+		return
+	}
 
 	fmt.Printf("cs2a-agent %s\n", version.Version)
 

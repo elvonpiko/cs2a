@@ -30,7 +30,15 @@ done
 
 CS2A_ROOT="${CS2A_ROOT:-/opt/cs2a}"
 GAME_UNIT="${CS2A_SERVICE_GAME:-cs2-server}"
+# The unit cs2a was actually configured for, so an adopted server is recognised
+# instead of being compared against the default name.
+if [[ -z ${CS2A_SERVICE_GAME:-} && -f $CS2A_ROOT/etc/agent.json ]]; then
+  svc=$(sed -n 's/.*"service_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$CS2A_ROOT/etc/agent.json" | head -1)
+  [[ -n ${svc:-} ]] && GAME_UNIT="$svc"
+fi
 GAME_UNIT_FILE="/etc/systemd/system/$GAME_UNIT.service"
+# cs2a's -usercon drop-in belongs to cs2a even when the unit does not.
+USERCON_DROPIN="/etc/systemd/system/$GAME_UNIT.service.d/10-cs2a-usercon.conf"
 
 # The game dir comes from agent.json when it is there, so --purge-game removes
 # what cs2a actually installed rather than a guessed path.
@@ -50,6 +58,8 @@ echo "cs2a: this will remove"
 echo "  - cs2a-panel.service and cs2a-agent.service"
 echo "  - $CS2A_ROOT/bin"
 [[ $OWN_GAME_UNIT -eq 1 ]] && echo "  - $GAME_UNIT.service (written by cs2a)"
+[[ -f $USERCON_DROPIN ]] && echo "  - $USERCON_DROPIN (the -usercon drop-in cs2a added)"
+[[ -f /etc/caddy/cs2a.caddyfile ]] && echo "  - /etc/caddy/cs2a.caddyfile and its import line"
 [[ $PURGE_CONFIG -eq 1 ]] && echo "  - $CS2A_ROOT/etc and $CS2A_ROOT/var (config, database, credentials)"
 [[ $PURGE_GAME -eq 1 ]] && echo "  - $CS2_DIR (the CS2 install — this cannot be undone)"
 if [[ $OWN_GAME_UNIT -eq 0 && -f $GAME_UNIT_FILE ]]; then
@@ -74,6 +84,13 @@ systemctl disable --now cs2a-panel.service cs2a-agent.service 2>/dev/null || tru
 echo "cs2a: removing units and binaries…"
 rm -f /etc/systemd/system/cs2a-panel.service /etc/systemd/system/cs2a-agent.service
 [[ $OWN_GAME_UNIT -eq 1 ]] && rm -f "$GAME_UNIT_FILE"
+# The drop-in is cs2a's even on an adopted unit: leaving it behind would keep
+# changing someone else's launch line after cs2a is gone.
+if [[ -f $USERCON_DROPIN ]]; then
+  rm -f "$USERCON_DROPIN"
+  rmdir "$(dirname "$USERCON_DROPIN")" 2>/dev/null || true
+  echo "cs2a: removed the -usercon drop-in (restart $GAME_UNIT.service to apply)"
+fi
 systemctl daemon-reload
 rm -rf "$CS2A_ROOT/bin" "$CS2A_ROOT/cache"
 
@@ -95,6 +112,16 @@ fi
 rmdir "$CS2A_ROOT" 2>/dev/null && echo "cs2a: removed $CS2A_ROOT" || true
 
 echo "cs2a: done."
-if [[ -f /etc/caddy/Caddyfile ]]; then
-  echo "cs2a: the Caddy site block for the panel is still in /etc/caddy/Caddyfile — remove it by hand if you no longer need it."
+# cs2a owns its own Caddy file, so this can be cleaned up exactly instead of
+# telling the operator to go find a site block by hand.
+if [[ -f /etc/caddy/cs2a.caddyfile ]]; then
+  rm -f /etc/caddy/cs2a.caddyfile
+  if [[ -f /etc/caddy/Caddyfile ]] && grep -qxF 'import /etc/caddy/cs2a.caddyfile' /etc/caddy/Caddyfile; then
+    cp -a /etc/caddy/Caddyfile "/etc/caddy/Caddyfile.cs2a-backup.$(date +%s)"
+    grep -vxF 'import /etc/caddy/cs2a.caddyfile' /etc/caddy/Caddyfile > /etc/caddy/Caddyfile.cs2a-tmp &&
+      mv -f /etc/caddy/Caddyfile.cs2a-tmp /etc/caddy/Caddyfile
+    echo "cs2a: removed the panel site from /etc/caddy/Caddyfile — reload caddy: systemctl reload caddy"
+  fi
+elif [[ -f /etc/caddy/Caddyfile ]] && grep -q "cs2a" /etc/caddy/Caddyfile; then
+  echo "cs2a: an older cs2a site block may still be in /etc/caddy/Caddyfile — remove it by hand if you no longer need it."
 fi

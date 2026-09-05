@@ -15,16 +15,27 @@ import (
 	"time"
 
 	"cs2a/internal/panel"
-	"cs2a/internal/panel/web"
 	"cs2a/internal/version"
 )
 
 func main() {
 	configPath := flag.String("config", "/etc/cs2a/panel.json", "path to panel.json")
+	check := flag.Bool("check", false, "validate the config file and exit")
 	flag.Parse()
 
+	// -check lets the installer verify panel.json with the code that will
+	// actually read it, instead of a best-effort JSON parse.
+	if *check {
+		cfg, err := panel.LoadConfig(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cs2a-panel: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("config ok: listen=%s agent=%s\n", cfg.Listen, cfg.AgentURL)
+		return
+	}
+
 	fmt.Printf("cs2a-panel %s\n", version.Version)
-	web.Version = version.Version
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 

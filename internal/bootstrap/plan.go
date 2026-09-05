@@ -29,6 +29,34 @@ type Plan struct {
 	MaxPlayers  int    // 12
 	Domain      string // optional reverse-proxy hostname (enables HTTPS)
 	WithCS2     bool   // install SteamCMD + CS2 server too
+	// ServiceName is the systemd unit that runs the game. When cs2a adopts an
+	// existing server this is the operator's own unit, not cs2-server.
+	ServiceName string
+	// GameBindIP is the address the game server binds (-ip). Empty means the
+	// unit binds every interface. An adopted server may bind a public address,
+	// in which case the agent must dial exactly that: assuming loopback is what
+	// produced "dial 127.0.0.1:27015: connect: connection refused".
+	GameBindIP string
+}
+
+// UnitName returns the systemd unit the agent controls.
+func (p Plan) UnitName() string {
+	if p.ServiceName != "" {
+		return p.ServiceName
+	}
+	return "cs2-server"
+}
+
+// RCONAddr is the address the agent dials for RCON and A2S. A wildcard bind is
+// reachable on loopback, which keeps the traffic off the network; an explicit
+// bind has to be used verbatim.
+func (p Plan) RCONAddr() string {
+	host := p.GameBindIP
+	switch host {
+	case "", "0.0.0.0", "::", "[::]", "*":
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, fmt.Sprint(p.GamePort))
 }
 
 // Secrets carries everything generated once and shown at the end.
@@ -254,14 +282,15 @@ func SteamCMDCmds(p Plan) []string {
 // than by string templating so a password containing a quote can never produce
 // a file the agent refuses to parse.
 func AgentConfig(p Plan, agentToken, rconPassword, wpDSN string) (string, error) {
+	addr := p.RCONAddr()
 	cfg := map[string]any{
 		"listen":        p.ListenAgent,
 		"token":         agentToken,
 		"cs2_dir":       p.CS2Dir,
-		"service_name":  "cs2-server",
-		"rcon_addr":     fmt.Sprintf("127.0.0.1:%d", p.GamePort),
+		"service_name":  p.UnitName(),
+		"rcon_addr":     addr,
 		"rcon_password": rconPassword,
-		"a2s_addr":      fmt.Sprintf("127.0.0.1:%d", p.GamePort),
+		"a2s_addr":      addr,
 		"db_path":       filepath.Join(p.InstallRoot, "var", "agent.db"),
 		"plugin_cache":  filepath.Join(p.InstallRoot, "cache", "plugins"),
 	}
