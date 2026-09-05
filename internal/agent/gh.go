@@ -81,6 +81,12 @@ func (g *GHClient) release(ctx context.Context, repo, ref string) (*GHRelease, e
 
 // Download streams a release asset to w with a hard size cap.
 func (g *GHClient) Download(ctx context.Context, assetURL string, w io.Writer, maxBytes int64) error {
+	return g.DownloadWith(ctx, nil, assetURL, w, maxBytes)
+}
+
+// DownloadWith streams a release asset using the supplied client, so callers
+// can apply a download-sized timeout instead of the short API one.
+func (g *GHClient) DownloadWith(ctx context.Context, client *http.Client, assetURL string, w io.Writer, maxBytes int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
 	if err != nil {
 		return err
@@ -89,7 +95,10 @@ func (g *GHClient) Download(ctx context.Context, assetURL string, w io.Writer, m
 	if g.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+g.Token)
 	}
-	resp, err := g.HTTP.Do(req)
+	if client == nil {
+		client = g.HTTP
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("github: download: %w", err)
 	}

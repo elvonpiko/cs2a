@@ -176,6 +176,9 @@ func parseGlove(v string) (defindex, paint int64, ok bool) {
 // --- plugin config files ------------------------------------------------
 
 // PluginConfigPath resolves the config JSON path for a catalog entry.
+// ConfigPath is relative to game/csgo (config locations differ by plugin type:
+// cssharp plugins keep theirs under addons/counterstrikesharp/configs/plugins,
+// metamod plugins under their own addons dir or cfg/).
 func (in *Installer) PluginConfigPath(id string) (string, error) {
 	entry, ok := Find(in.catalog, id)
 	if !ok {
@@ -184,7 +187,12 @@ func (in *Installer) PluginConfigPath(id string) (string, error) {
 	if entry.ConfigPath == "" {
 		return "", fmt.Errorf("plugins: %s has no editable config", id)
 	}
-	return filepath.Join(in.cfg.CSGODir(), "addons", "counterstrikesharp", "configs", filepath.FromSlash(entry.ConfigPath)), nil
+	csgo := in.cfg.CSGODir()
+	path := filepath.Join(csgo, filepath.FromSlash(entry.ConfigPath))
+	if !safeSubPath(csgo, path) {
+		return "", fmt.Errorf("plugins: %s has an unsafe config path", id)
+	}
+	return path, nil
 }
 
 // GetPluginConfig returns the raw JSON of an entry's config file.

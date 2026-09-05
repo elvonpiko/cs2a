@@ -6,13 +6,18 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+// mmArtifact is the versioned metamod filename the pointer file names.
+const mmArtifact = "mmsource-2.0.0-git1411-linux.tar.gz"
 
 // fakeGH serves GitHub-API-like release metadata and a downloadable asset.
 func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
@@ -23,26 +28,37 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		json.NewEncoder(w).Encode(GHRelease{
 			TagName: "v100.0.0",
 			Assets: []GHAsset{
-				{Name: "CounterStrikeSharp-Site-Windows.zip", URL: base + "/assets/cssharp-site.zip"},
-				{Name: "CounterStrikeSharp-with-runtime-linux-x64.zip", URL: base + "/assets/cssharp-runtime.zip"},
+				{Name: "counterstrikesharp-windows-100.0.0.zip", URL: base + "/assets/cssharp-win.zip"},
+				{Name: "counterstrikesharp-with-runtime-linux-100.0.0.zip", URL: base + "/assets/cssharp-runtime.zip"},
 			},
 		})
 	})
 	mux.HandleFunc("/repos/Nereziel/cs2-WeaponPaints/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(GHRelease{
-			TagName: "v1.5.4",
+			TagName: "build-459",
 			Assets: []GHAsset{
-				{Name: "WeaponPaints-1.5.4.zip", URL: base + "/assets/wp.zip"},
+				// the website bundle must never be picked for a game server
+				{Name: "WeaponPaints-Website.zip", URL: base + "/assets/wp-site.zip"},
+				{Name: "WeaponPaints.zip", URL: base + "/assets/wp.zip"},
 			},
 		})
 	})
-	mux.HandleFunc("/mmsdrop/2.0/mmsource-latest-linux.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+	// AlliedModders publishes a pointer file naming the current build; the
+	// versioned tarball sits next to it. Serving both is what makes the
+	// two-step resolution testable.
+	mux.HandleFunc("/mmsdrop/2.0/mmsource-latest-linux", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		io.WriteString(w, mmArtifact+"\n")
+	})
+	mux.HandleFunc("/mmsdrop/2.0/"+mmArtifact, func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
 		gw := gzip.NewWriter(&buf)
 		tw := tar.NewWriter(gw)
 		body := "ELF"
-		_ = tw.WriteHeader(&tar.Header{Name: "addons/metamod/metamod.2.cs2.so", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_ = tw.WriteHeader(&tar.Header{Name: "addons/metamod/bin/linuxsteamrt64/metamod.2.cs2.so", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
 		tw.Write([]byte(body))
+		_ = tw.WriteHeader(&tar.Header{Name: "addons/metamod.vdf", Mode: 0o644, Size: 4, Typeflag: tar.TypeReg})
+		tw.Write([]byte("vdf\n"))
 		tw.Close()
 		gw.Close()
 		w.Header().Set("Content-Type", "application/gzip")
@@ -56,12 +72,19 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
 	})
+	// the real WeaponPaints.zip holds a bare WeaponPaints/ folder — the
+	// installer must place it under the cssharp plugins dir
 	mux.HandleFunc("/assets/wp.zip", func(w http.ResponseWriter, r *http.Request) {
 		zipBytes, _ := makeZip(map[string][]byte{
-			"addons/counterstrikesharp/plugins/WeaponPaints/WeaponPaints.dll": {9},
+			"WeaponPaints/WeaponPaints.dll": {9},
+			"WeaponPaints/lang/en.json":     []byte("{}"),
 		})
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
+	})
+	mux.HandleFunc("/assets/wp-site.zip", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("installer downloaded the WeaponPaints website bundle")
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 	srv := httptest.NewServer(mux)
 	base = srv.URL // handlers capture by reference
@@ -122,7 +145,7 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 	if !res.InstalledDeps {
 		t.Fatal("expected cssharp+metamod to be installed as deps")
 	}
-	if res.Version != "v1.5.4" {
+	if res.Version != "build-459" {
 		t.Fatalf("version = %q", res.Version)
 	}
 
@@ -144,8 +167,10 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 			t.Errorf("%s not recorded as installed", id)
 		}
 	}
+	// Owns is authoritative: uninstalling must not delete the shared addons/
+	// tree that every other plugin lives in.
 	st, _ := store.GetPluginState("weaponpaints")
-	if st.Manifest["top0"] != "addons" {
+	if st.Manifest["top0"] != "addons/counterstrikesharp/plugins/WeaponPaints" {
 		t.Fatalf("manifest = %+v", st.Manifest)
 	}
 
@@ -157,7 +182,7 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 	if res2.InstalledDeps {
 		t.Fatal("deps should already be installed")
 	}
-	if res2.Version != "v1.5.4" {
+	if res2.Version != "build-459" {
 		t.Fatalf("reinstall version = %q", res2.Version)
 	}
 }
@@ -183,16 +208,20 @@ func TestInstallerMetamodPostInstallPatchesGameinfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install metamod: %v", err)
 	}
-	if res.Version != "latest" || res.RequiresRestart != true {
+	// the version comes from the pointer file, not a hardcoded "latest"
+	if res.Version != "2.0.0-git1411" || res.RequiresRestart != true {
 		t.Fatalf("res = %+v", res)
 	}
 	raw, _ := os.ReadFile(gi)
 	if !bytes.Contains(raw, []byte("csgo/addons/metamod")) {
 		t.Fatalf("gameinfo not patched:\n%s", raw)
 	}
-	so := filepath.Join(cfg.CSGODir(), "addons/metamod/metamod.2.cs2.so")
+	so := filepath.Join(cfg.CSGODir(), "addons/metamod/bin/linuxsteamrt64/metamod.2.cs2.so")
 	if !fileExists(so) {
 		t.Fatal("metamod file missing")
+	}
+	if !fileExists(filepath.Join(cfg.CSGODir(), "addons/metamod.vdf")) {
+		t.Fatal("metamod.vdf missing")
 	}
 }
 
@@ -292,5 +321,109 @@ func TestCatalogAnnotated(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("metamod missing from catalog")
+	}
+}
+
+// Every catalog entry must be internally consistent: the asset pattern has to
+// compile, Owns must be present (an uninstall with no recorded paths would
+// silently leave files behind), and Dest/Owns must agree.
+func TestCatalogEntriesWellFormed(t *testing.T) {
+	ids := map[string]bool{}
+	for _, e := range DefaultCatalog() {
+		if ids[e.ID] {
+			t.Errorf("duplicate catalog id %q", e.ID)
+		}
+		ids[e.ID] = true
+		if e.Name == "" || e.Description == "" || e.Homepage == "" {
+			t.Errorf("%s: missing name/description/homepage", e.ID)
+		}
+		switch e.Kind {
+		case KindRuntime, KindMetamodPlugin, KindCSSharpPlugin:
+		default:
+			t.Errorf("%s: unknown kind %q", e.ID, e.Kind)
+		}
+		if e.Repo == "" && e.URL == "" {
+			t.Errorf("%s: neither repo nor url", e.ID)
+		}
+		if e.Repo != "" {
+			if e.AssetRegex == "" {
+				t.Errorf("%s: repo without asset regex", e.ID)
+			}
+			if _, err := regexp.Compile(e.AssetRegex); err != nil {
+				t.Errorf("%s: asset regex: %v", e.ID, err)
+			}
+		}
+		if e.AssetReject != "" {
+			if _, err := regexp.Compile(e.AssetReject); err != nil {
+				t.Errorf("%s: asset reject regex: %v", e.ID, err)
+			}
+		}
+		if len(e.Owns) == 0 {
+			t.Errorf("%s: no owned paths — uninstall would be a no-op", e.ID)
+		}
+		for _, p := range e.Owns {
+			if strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
+				t.Errorf("%s: owned path %q must be csgo-relative", e.ID, p)
+			}
+		}
+		if strings.HasPrefix(e.Dest, "/") || strings.Contains(e.Dest, "..") {
+			t.Errorf("%s: dest %q must be csgo-relative", e.ID, e.Dest)
+		}
+		for _, dep := range e.Requires {
+			if _, ok := Find(DefaultCatalog(), dep); !ok {
+				t.Errorf("%s: requires unknown entry %q", e.ID, dep)
+			}
+		}
+	}
+	// the two runtime layers everything else depends on must exist
+	for _, id := range []string{"metamod", "cssharp"} {
+		if !ids[id] {
+			t.Errorf("catalog missing %s", id)
+		}
+	}
+}
+
+// An upstream release that grows a second matching asset must fail loudly
+// rather than install a Windows build or a bundle that duplicates a dependency.
+func TestResolveArtifactRejectsAmbiguity(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/shobhit-pathak/MatchZy/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(GHRelease{
+			TagName: "1.0.0",
+			Assets: []GHAsset{
+				{Name: "MatchZy-1.0.0-with-cssharp-linux.zip", URL: "http://x/a.zip"},
+				{Name: "MatchZy-1.0.0-with-cssharp-windows.zip", URL: "http://x/b.zip"},
+				{Name: "MatchZy-1.0.0.zip", URL: "http://x/c.zip"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	gh := NewGHClient("")
+	gh.HTTP.Transport = rewriteTransport{base: http.DefaultTransport, to: srv.URL}
+	in := NewInstaller(cfg, store, DefaultCatalog(), gh)
+
+	// AssetReject narrows the three assets down to the plain one.
+	entry, _ := Find(DefaultCatalog(), "matchzy")
+	name, url, version, err := in.resolveArtifact(context.Background(), entry)
+	if err != nil {
+		t.Fatalf("resolve with reject: %v", err)
+	}
+	if name != "MatchZy-1.0.0.zip" || version != "1.0.0" || url != "http://x/c.zip" {
+		t.Fatalf("picked %q (%s) @ %q", name, url, version)
+	}
+
+	// Without it, the ambiguity must be reported instead of guessed.
+	entry.AssetReject = ""
+	if _, _, _, err = in.resolveArtifact(context.Background(), entry); err == nil {
+		t.Fatal("expected an error for 3 matching assets")
+	} else if !strings.Contains(err.Error(), "narrower pattern") {
+		t.Fatalf("unhelpful error: %v", err)
 	}
 }

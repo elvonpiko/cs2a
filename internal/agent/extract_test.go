@@ -48,7 +48,7 @@ func TestExtractZipBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest)
+	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest, 0)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestExtractZipSlipContainment(t *testing.T) {
 		t.Fatal(err)
 	}
 	dest := t.TempDir()
-	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest)
+	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest, 0)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestExtractZipNulNameRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), t.TempDir()); !errors.Is(err, ErrUnsafePath) {
+	if _, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), t.TempDir(), 0); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("want ErrUnsafePath, got %v", err)
 	}
 }
@@ -127,7 +127,7 @@ func TestExtractTarGzBasic(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	tops, err := extractTarGz(bytes.NewReader(raw.Bytes()), dest)
+	tops, err := extractTarGz(bytes.NewReader(raw.Bytes()), dest, 0)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -144,8 +144,80 @@ func TestExtractTarGzBasic(t *testing.T) {
 }
 
 func TestExtractArchiveUnsupported(t *testing.T) {
-	if _, err := extractArchive("thing.rar", readerAt([]byte{0}), 1, t.TempDir()); err == nil {
+	if _, err := extractArchive("thing.rar", readerAt([]byte{0}), 1, t.TempDir(), 0); err == nil {
 		t.Fatal("expected error for unsupported type")
+	}
+}
+
+// Several upstream releases wrap everything in a version directory
+// (SharpTimer-v0.4.0/addons/...). Strip must remove it so files land in the
+// right place, and entries inside the stripped prefix alone are skipped.
+func TestExtractZipStripComponents(t *testing.T) {
+	zipBytes, err := makeZip(map[string][]byte{
+		"SharpTimer-v0.4.0/addons/counterstrikesharp/plugins/X/X.dll": {9},
+		"SharpTimer-v0.4.0/README.md":                                 []byte("hi"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	tops, err := extractZip(readerAt(zipBytes), int64(len(zipBytes)), dest, 1)
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if len(tops) != 2 || tops[0] != "README.md" || tops[1] != "addons" {
+		t.Fatalf("tops = %v", tops)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "addons/counterstrikesharp/plugins/X/X.dll")); err != nil {
+		t.Fatalf("stripped path wrong: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "SharpTimer-v0.4.0")); err == nil {
+		t.Fatal("wrapper directory was not stripped")
+	}
+}
+
+// archiveTops must report the layout without writing anything, and detectStrip
+// must tell a release wrapper ("SharpTimer-v0.4.0/addons/…") apart from a bare
+// plugin folder ("WeaponPaints/WeaponPaints.dll"), which IS the payload.
+func TestArchiveTopsAndStripDetection(t *testing.T) {
+	bare, err := makeZip(map[string][]byte{
+		"WeaponPaints/WeaponPaints.dll": {1},
+		"WeaponPaints/lang/en.json":     []byte("{}"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tops, err := archiveTops("wp.zip", readerAt(bare), int64(len(bare)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tops) != 1 || tops[0] != "WeaponPaints" {
+		t.Fatalf("tops = %v", tops)
+	}
+	if got := detectStrip("wp.zip", readerAt(bare), int64(len(bare))); got != 0 {
+		t.Fatalf("bare plugin folder must not be stripped, got %d", got)
+	}
+
+	wrapped, err := makeZip(map[string][]byte{
+		"SharpTimer-v0.4.0/addons/counterstrikesharp/plugins/S/S.dll": {2},
+		"SharpTimer-v0.4.0/README.md":                                 []byte("x"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := detectStrip("s.zip", readerAt(wrapped), int64(len(wrapped))); got != 1 {
+		t.Fatalf("version wrapper must be stripped, got %d", got)
+	}
+
+	rooted, err := makeZip(map[string][]byte{
+		"addons/metamod/cs2fixes.vdf": {3},
+		"cfg/cs2fixes/cs2fixes.cfg":   {4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := detectStrip("f.zip", readerAt(rooted), int64(len(rooted))); got != 0 {
+		t.Fatalf("already-rooted archive must not be stripped, got %d", got)
 	}
 }
 
