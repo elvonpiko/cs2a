@@ -3,33 +3,41 @@ package agent
 import (
 	"os"
 	"path/filepath"
+
+	"cs2a/internal/fsatomic"
 )
 
 // atomicWrite writes data to path via a temp file + rename so readers never
-// observe partial files.
+// observe partial files, keeping the destination's owner.
+//
+// The rename replaces the file rather than editing it, so the result is a brand
+// new inode owned by whoever ran the agent — root. Every write into the game
+// tree therefore used to strip the game user's ownership: patching cssharp's
+// core.json made it root-owned and cssharp, running unprivileged, could no
+// longer rewrite it.
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	dir := dirOf(path)
-	tmp, err := os.CreateTemp(dir, ".cs2a-*")
-	if err != nil {
-		return err
+	return fsatomic.Write(path, data, perm)
+}
+
+// statOwner reports the owner of path without following symlinks.
+func statOwner(path string) (uid, gid int, ok bool) {
+	return fsatomic.Owner(path)
+}
+
+// ownerToInherit is the ownership atomicWrite gives a file it replaces or
+// creates. Exposed here for the tests that pin the behaviour.
+func ownerToInherit(path string) (uid, gid int, ok bool) {
+	if os.Geteuid() != 0 {
+		return 0, 0, false
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+	if u, g, found := statOwner(path); found {
+		return u, g, u != 0 || g != 0
 	}
-	if err := tmp.Chmod(perm); err != nil {
-		tmp.Close()
-		return err
+	u, g, found := statOwner(dirOf(path))
+	if !found {
+		return 0, 0, false
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return os.Chmod(path, perm) // rename may have kept temp file mode
+	return u, g, u != 0 || g != 0
 }
 
 // ensureDir creates dir and all parents.
