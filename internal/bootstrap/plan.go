@@ -7,6 +7,7 @@ package bootstrap
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -25,7 +26,8 @@ type Plan struct {
 	ListenPanel string // 0.0.0.0:8080
 	ListenAgent string // 127.0.0.1:8100
 	GamePort    int    // 27015
-	Domain      string // optional reverse-proxy hostname (informational)
+	MaxPlayers  int    // 12
+	Domain      string // optional reverse-proxy hostname (enables HTTPS)
 	WithCS2     bool   // install SteamCMD + CS2 server too
 }
 
@@ -48,6 +50,7 @@ func DefaultPlan() Plan {
 		ListenPanel: "0.0.0.0:8080",
 		ListenAgent: "127.0.0.1:8100",
 		GamePort:    27015,
+		MaxPlayers:  12,
 		WithCS2:     true,
 	}
 }
@@ -124,10 +127,16 @@ func ValidateCS2Dir(dir string) error {
 	return nil
 }
 
-// SystemdUnit renders the cs2-server unit for the game.
+// SystemdUnit renders the cs2-server unit for the game. -usercon is what makes
+// RCON reachable at all; without it the panel can read A2S status but cannot
+// change maps or run commands.
 func SystemdUnit(p Plan, rconPassword, gslt string) string {
-	execStart := fmt.Sprintf("%s/game/cs2.sh -dedicated -console -usercon +ip 0.0.0.0 +port %d +map de_dust2 +exec server.cfg",
-		p.CS2Dir, p.GamePort)
+	maxPlayers := p.MaxPlayers
+	if maxPlayers <= 0 {
+		maxPlayers = 12
+	}
+	execStart := fmt.Sprintf("%s/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port %d -maxplayers %d +map de_dust2 +exec server.cfg",
+		p.CS2Dir, p.GamePort, maxPlayers)
 	if gslt != "" {
 		execStart += " +sv_setsteamaccount " + gslt
 	}
@@ -195,12 +204,43 @@ func PanelEnv(adminUser, adminPass string) string {
 	return "CS2A_ADMIN_USER=" + adminUser + "\nCS2A_ADMIN_PASSWORD=" + adminPass + "\n"
 }
 
-// FirewallCommands returns the iptables/ufw commands for the chosen ports.
+// FirewallCommands returns the ufw commands for the chosen ports. The panel
+// port is included because the panel is the only thing a user needs to reach;
+// with a domain, Caddy answers on 80/443 and the raw port stays closed.
 func FirewallCommands(p Plan) []string {
-	return []string{
-		fmt.Sprintf("ufw allow %d/tcp", p.GamePort), // RCON (localhost used, but remote admins may need it)
+	cmds := []string{
 		fmt.Sprintf("ufw allow %d/udp", p.GamePort), // game + A2S
+		fmt.Sprintf("ufw allow %d/tcp", p.GamePort), // RCON
 	}
+	if p.Domain != "" {
+		return append(cmds, "ufw allow 80/tcp", "ufw allow 443/tcp")
+	}
+	_, port := SplitHostPort(p.ListenPanel)
+	if port == "" {
+		port = "8080"
+	}
+	return append(cmds, "ufw allow "+port+"/tcp")
+}
+
+// CaddySite renders the Caddyfile site block for the panel. The long
+// response-header timeout matters: plugin installs and map changes can take
+// minutes, and Caddy's default would cut the request off first.
+func CaddySite(p Plan) string {
+	_, port := SplitHostPort(p.ListenPanel)
+	if port == "" {
+		port = "8080"
+	}
+	return fmt.Sprintf(`%s {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:%s {
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 10m
+		}
+		flush_interval -1
+	}
+}
+`, p.Domain, port)
 }
 
 // SteamCMDCmds returns the steamcmd invocation to install/update CS2.
@@ -208,6 +248,51 @@ func SteamCMDCmds(p Plan) []string {
 	return []string{
 		fmt.Sprintf("steamcmd +force_install_dir %s +login anonymous +app_update 730 validate +quit", p.CS2Dir),
 	}
+}
+
+// AgentConfig renders agent.json. It is built by marshalling a struct rather
+// than by string templating so a password containing a quote can never produce
+// a file the agent refuses to parse.
+func AgentConfig(p Plan, agentToken, rconPassword, wpDSN string) (string, error) {
+	cfg := map[string]any{
+		"listen":        p.ListenAgent,
+		"token":         agentToken,
+		"cs2_dir":       p.CS2Dir,
+		"service_name":  "cs2-server",
+		"rcon_addr":     fmt.Sprintf("127.0.0.1:%d", p.GamePort),
+		"rcon_password": rconPassword,
+		"a2s_addr":      fmt.Sprintf("127.0.0.1:%d", p.GamePort),
+		"db_path":       filepath.Join(p.InstallRoot, "var", "agent.db"),
+		"plugin_cache":  filepath.Join(p.InstallRoot, "cache", "plugins"),
+	}
+	if wpDSN != "" {
+		cfg["wp_dsn"] = wpDSN
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
+}
+
+// PanelConfig renders panel.json. public_url is what lets the panel accept its
+// own forms and set Secure cookies when a reverse proxy fronts it.
+func PanelConfig(p Plan, agentToken string) (string, error) {
+	cfg := map[string]any{
+		"listen":           p.ListenPanel,
+		"agent_url":        "http://" + p.ListenAgent,
+		"agent_token":      agentToken,
+		"db_path":          filepath.Join(p.InstallRoot, "var", "panel.db"),
+		"setup_token_file": filepath.Join(p.InstallRoot, "etc", "panel-setup-token"),
+	}
+	if p.Domain != "" {
+		cfg["public_url"] = "https://" + p.Domain
+	}
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b) + "\n", nil
 }
 
 // SplitHostPort is a tiny helper for display code.

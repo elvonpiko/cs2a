@@ -20,8 +20,8 @@ set -euo pipefail
 CS2A_VERSION="${CS2A_VERSION:-}"
 CS2A_RAW_BASE="${CS2A_RAW_BASE:-https://raw.githubusercontent.com/elvonpiko/cs2a}"
 
-c_info() { printf '\033[38;5;209m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
-c_die()  { printf '\033[31merror:\033[0m %s\n' "$1" >&2; exit 1; }
+c_info() { printf '\033[38;5;79m==>\033[0m \033[1m%s\033[0m\n' "$1"; }
+c_die()  { printf '\033[38;5;174merror:\033[0m %s\n' "$1" >&2; exit 1; }
 
 # --- sanity ------------------------------------------------------------------
 [[ $(uname -s) == "Linux" ]] || c_die "cs2a installs on Linux only (this is $(uname -s))."
