@@ -1,9 +1,11 @@
 package panel
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"cs2a/internal/cs2"
 	"cs2a/internal/panel/web"
@@ -27,12 +29,23 @@ func uptimeLabel(secs float64) string {
 	}
 }
 
-// buildServerView assembles the server page model from the agent.
-func (s *Server) buildServerView(ctx *http.Request, u *User) web.ServerView {
-	v := web.ServerView{IsAdmin: u.Role == "admin", PanelVersion: panelVersion}
-	st, err := s.agent.Status(ctx.Context())
+// buildServerView assembles the full server page model from the agent.
+func (s *Server) buildServerView(r *http.Request, u *User) web.ServerView {
+	return s.serverView(r, u, false)
+}
+
+// serverView builds the server page model. polled trims the work to what the
+// 5 s status refresh actually swaps: the map list means a directory scan and the
+// journal tail means spawning journalctl, and neither is part of the polled
+// regions — doing them anyway cost two extra agent round-trips every five
+// seconds for every open admin tab.
+func (s *Server) serverView(r *http.Request, u *User, polled bool) web.ServerView {
+	ctx := r.Context()
+	v := web.ServerView{IsAdmin: u.Role == "admin", PanelVersion: panelVersion, Polled: polled}
+	st, err := s.agent.Status(ctx)
 	if err != nil {
-		v.Note = "agent unreachable: " + err.Error()
+		v.Problem = "The panel cannot reach the cs2a agent."
+		v.ProblemFix = err.Error()
 		return v
 	}
 	v.Online = st.Service.Active
@@ -48,29 +61,77 @@ func (s *Server) buildServerView(ctx *http.Request, u *User) web.ServerView {
 		if v.Map == "" {
 			v.Map = st.Rcon.Map
 		}
+		if v.Hostname == "" {
+			v.Hostname = st.Rcon.Hostname
+		}
 		v.PlayerList = make([]web.PlayerRow, 0, len(st.Rcon.Players))
 		for _, p := range st.Rcon.Players {
 			v.PlayerList = append(v.PlayerList, web.PlayerRow{
 				Name:      p.Name,
+				Addr:      p.Addr,
 				SteamID:   p.SteamID,
 				Connected: p.Connected,
 				Ping:      p.Ping,
 				State:     p.State,
-				IsBot:     p.SteamID == "",
+				// CS2's status table carries no SteamID for anyone, so "no
+				// SteamID" cannot mean "bot" any more — the engine reports that
+				// separately, and inferring it here labelled every human a BOT.
+				IsBot: p.Bot,
 			})
+		}
+		// When A2S did not answer, RCON is the only source of the counts. The
+		// header used to read "0 players" while the list below it showed the
+		// people who were connected.
+		if st.Info == nil {
+			v.Players = st.Rcon.Humans + st.Rcon.Bots
+			v.Bots = st.Rcon.Bots
+			// CS2 always prints "(0 max)" in status, so a zero here is "unknown",
+			// not "no slots".
+			if st.Rcon.Max > 0 {
+				v.Max = st.Rcon.Max
+			}
 		}
 	}
 	if st.Service.UptimeSeconds > 0 {
 		v.UptimeLabel = uptimeLabel(st.Service.UptimeSeconds)
 	}
-	if v.Note == "" {
+	// A diagnosed RCON problem is shown as a problem with a fix, not as a raw
+	// note: "dial 127.0.0.1:27015: connection refused" told the operator
+	// nothing they could act on.
+	if st.Diag != nil && !st.Diag.OK {
+		v.Problem = capitalize(st.Diag.Reason) + "."
+		if st.Diag.Fix != "" {
+			v.ProblemFix = capitalize(st.Diag.Fix) + "."
+		}
+		v.CanRepair = st.Diag.Repairable
+	} else if st.Note != "" {
 		v.Note = st.Note
 	}
-	if maps, err := s.agent.Maps(ctx.Context()); err == nil {
+	if polled {
+		return v
+	}
+	if maps, err := s.agent.Maps(ctx); err == nil {
 		v.Maps = maps
 		v.CurrentMap = v.Map
 	}
+	// The journal is the first thing anyone needs when a server will not start,
+	// and it is only fetched for admins (it can contain connection details).
+	if v.IsAdmin {
+		if lines, err := s.agent.Logs(ctx, 40); err == nil {
+			v.LogLines = lines
+		}
+	}
 	return v
+}
+
+// capitalize upper-cases the first letter so agent messages read as sentences.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 func boolLabel(b bool) string {
@@ -93,24 +154,70 @@ func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatusCardPartial(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
-	v := s.buildServerView(r, u)
+	// The polled view also carries the lifecycle row and the player list
+	// out-of-band, so they cannot drift out of sync with the status the operator
+	// is looking at.
+	v := s.serverView(r, u, true)
 	if err := web.StatusCard(v).Render(r.Context(), w); err != nil {
 		s.log.Error("render status partial", "err", err)
 	}
 }
 
+// handleServerLogsPartial re-renders just the log card. It does not build the
+// whole server view: the log panel needs nothing but the journal, and a full
+// build would cost an A2S round trip and an RCON probe per click.
+func (s *Server) handleServerLogsPartial(w http.ResponseWriter, r *http.Request) {
+	v := web.ServerView{IsAdmin: true}
+	if lines, err := s.agent.Logs(r.Context(), 40); err == nil {
+		v.LogLines = lines
+	}
+	if err := web.ServerLogs(v).Render(r.Context(), w); err != nil {
+		s.log.Error("render logs partial", "err", err)
+	}
+}
+
 // --- server actions -------------------------------------------------------
 
+// handleServerAction performs a lifecycle action. The agent verifies the unit
+// actually reached the requested state, so the flash reports what happened
+// instead of the old optimistic "Server starting…" that appeared even when the
+// unit died immediately.
 func (s *Server) handleServerAction(action string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u := userFromCtx(r)
-		if err := s.agent.ServerAction(r.Context(), action); err != nil {
-			redirectFlash(w, r, "/", "err", actionError(action, err))
+		res, err := s.agent.ServerAction(r.Context(), action)
+		if err != nil {
+			msg := actionError(action, err)
+			if res != nil && len(res.Log) > 0 {
+				msg += " Last log lines: " + lastLogLine(res.Log)
+			}
+			redirectFlash(w, r, "/", "err", msg)
 			return
 		}
 		s.store.Audit(u.Username, "server."+action, "")
-		redirectFlash(w, r, "/", "ok", actionMessage(action))
+		msg := actionMessage(action)
+		if res != nil && res.Message != "" {
+			msg = res.Message
+		}
+		redirectFlash(w, r, "/", "ok", msg)
 	}
+}
+
+// lastLogLine picks the most useful journal line for a one-line flash: the last
+// non-empty entry, with systemd's timestamp/host/unit prefix removed.
+func lastLogLine(lines []string) string {
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		// "Sep 05 12:00:00 host cs2-server[123]: message"
+		if idx := strings.Index(l, "]: "); idx > 0 {
+			l = l[idx+3:]
+		}
+		return l
+	}
+	return ""
 }
 
 func actionMessage(action string) string {
@@ -125,7 +232,53 @@ func actionMessage(action string) string {
 }
 
 func actionError(action string, err error) string {
-	return "Failed to " + action + " server: " + err.Error()
+	return "Failed to " + action + " the server: " + err.Error()
+}
+
+// handleRCONRepair applies the RCON fixes the agent diagnosed.
+func (s *Server) handleRCONRepair(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	applied, res, diag, err := s.agent.RCONRepair(r.Context())
+	if err != nil {
+		redirectFlash(w, r, "/", "err", "Could not repair the server connection: "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "server.rcon.repair", strings.Join(applied, "; "))
+	switch {
+	case len(applied) == 0:
+		redirectFlash(w, r, "/", "ok", firstNonEmpty(res.Message, "Nothing needed repairing."))
+	case diag != nil && diag.OK:
+		redirectFlash(w, r, "/", "ok", "Fixed: "+joinHuman(applied)+". The server connection works now.")
+	default:
+		msg := "Applied: " + joinHuman(applied) + "."
+		if diag != nil && diag.Reason != "" {
+			msg += " Still not reachable: " + diag.Reason + "."
+		} else {
+			msg += " The server is restarting; give it a minute to finish loading."
+		}
+		redirectFlash(w, r, "/", "ok", msg)
+	}
+}
+
+// joinHuman renders a list as "a, b and c".
+func joinHuman(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleMapChange(w http.ResponseWriter, r *http.Request) {
@@ -151,49 +304,28 @@ func (s *Server) pluginCatalogCards(w http.ResponseWriter, r *http.Request) []we
 		redirectFlash(w, r, "/", "err", "Agent unreachable: "+err.Error())
 		return nil
 	}
+	return pluginCardViews(entries)
+}
+
+// pluginCardViews maps agent catalog entries to card models.
+func pluginCardViews(entries []PluginEntry) []web.PluginCardView {
 	out := make([]web.PluginCardView, 0, len(entries))
 	for _, e := range entries {
-		v := web.PluginCardView{
-			ID:        e.ID,
-			Name:      e.Name,
-			Author:    e.Author,
-			Kind:      e.Kind,
-			Homepage:  e.Homepage,
-			HasConfig: true, // presence is resolved by the config page
-			Requires:  e.Requires,
-		}
-		v.Description = e.Description
-		installed, version := parseInstalledAnnotation(e.Description)
-		v.Installed = installed
-		v.Version = version
-		if v.Installed {
-			// strip the annotation from the description for display
-			v.Description = stripInstalledAnnotation(e.Description)
-		}
-		out = append(out, v)
+		out = append(out, web.PluginCardView{
+			ID:          e.ID,
+			Name:        e.Name,
+			Author:      e.Author,
+			Kind:        e.Kind,
+			Homepage:    e.Homepage,
+			HasConfig:   e.ConfigPath != "",
+			Requires:    e.Requires,
+			Description: e.Description,
+			Installed:   e.Installed,
+			Version:     e.InstalledVersion,
+			RequiredBy:  e.RequiredBy,
+		})
 	}
 	return out
-}
-
-func parseInstalledAnnotation(desc string) (bool, string) {
-	if !strings.HasPrefix(desc, "[installed ") {
-		return false, ""
-	}
-	end := strings.Index(desc, "]")
-	if end < 0 {
-		return false, ""
-	}
-	return true, desc[len("[installed "):end]
-}
-
-func stripInstalledAnnotation(desc string) string {
-	if !strings.HasPrefix(desc, "[installed ") {
-		return desc
-	}
-	if end := strings.Index(desc, "]"); end >= 0 {
-		return strings.TrimSpace(desc[end+1:])
-	}
-	return desc
 }
 
 func (s *Server) handlePluginsPage(w http.ResponseWriter, r *http.Request) {
@@ -227,22 +359,58 @@ func (s *Server) pluginJobViews(r *http.Request) []web.PluginJobView {
 			Name:    name,
 			Status:  j.Status,
 			Step:    j.Step,
-			Message: j.Message,
+			Message: humanJobError(j.Message),
 			Running: j.Running(),
 		}
 		if j.Result != nil {
 			v.Version = j.Result.Version
 			v.RequiresRestart = j.Result.RequiresRestart
+			v.Warning = j.Result.Warning
 		}
 		out = append(out, v)
 	}
 	return out
 }
 
+// humanJobError strips the internal "plugins: …" prefixes the agent's error
+// chain accumulates. The user saw
+// "plugins: dependency cssharp: plugins: dependency metamod: plugins: metamod:
+// read pointer: Get …" — every prefix in that string was noise.
+func humanJobError(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	for {
+		trimmed := strings.TrimPrefix(msg, "plugins: ")
+		if trimmed == msg {
+			break
+		}
+		msg = strings.TrimSpace(trimmed)
+	}
+	return capitalize(msg)
+}
+
 // handlePluginJobsPartial is polled by the plugins page while an install runs.
+//
+// When nothing is running any more it also swaps a fresh copy of the card grid
+// out-of-band: an install that just finished has to flip its card to
+// "installed" (and enable Configure), which previously needed a manual reload.
 func (s *Server) handlePluginJobsPartial(w http.ResponseWriter, r *http.Request) {
-	if err := web.PluginJobs(s.pluginJobViews(r)).Render(r.Context(), w); err != nil {
+	jobs := s.pluginJobViews(r)
+	if err := web.PluginJobs(jobs).Render(r.Context(), w); err != nil {
 		s.log.Error("render plugin jobs", "err", err)
+		return
+	}
+	if web.AnyRunning(jobs) {
+		return // still working; the cards cannot have changed yet
+	}
+	entries, err := s.agent.Plugins(r.Context())
+	if err != nil {
+		return // the strip already rendered; a stale grid is not worth an error
+	}
+	if err := web.PluginCards(pluginCardViews(entries), true).Render(r.Context(), w); err != nil {
+		s.log.Error("render plugin cards oob", "err", err)
 	}
 }
 
@@ -253,7 +421,7 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 	// which no HTTP request (or reverse proxy) should be asked to hold open.
 	job, err := s.agent.InstallAsync(r.Context(), id, false)
 	if err != nil {
-		redirectFlash(w, r, "/plugins", "err", "Install failed: "+err.Error())
+		redirectFlash(w, r, "/plugins", "err", "Install failed: "+humanJobError(err.Error()))
 		return
 	}
 	s.store.Audit(u.Username, "plugin.install.start", id+" job="+job.ID)
@@ -264,7 +432,17 @@ func (s *Server) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	id := r.PathValue("id")
 	if err := s.agent.Uninstall(r.Context(), id); err != nil {
-		redirectFlash(w, r, "/plugins", "err", "Uninstall failed: "+err.Error())
+		// A conflict is a "not now", not a failure: the operator has to wait for
+		// a running install rather than fix anything. Labelling it "Uninstall
+		// failed" sent people looking for a broken plugin.
+		var api *APIError
+		if errors.As(err, &api) && api.Status == http.StatusConflict {
+			redirectFlash(w, r, "/plugins", "err", humanJobError(api.Message))
+			return
+		}
+		// The agent's refusal ("… is required by CounterStrikeSharp") is the
+		// useful part; its internal "plugins: " prefixes are not.
+		redirectFlash(w, r, "/plugins", "err", "Uninstall failed: "+humanJobError(err.Error()))
 		return
 	}
 	s.store.Audit(u.Username, "plugin.uninstall", id)
@@ -311,12 +489,13 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	v := web.AccessView{}
 
-	if settings, err := s.agent.Settings(r.Context()); err == nil {
+	if settings, warning, err := s.agent.Settings(r.Context()); err == nil {
 		for _, set := range settings {
 			if set.Name == "sv_password" && set.Value != "0" && set.Value != "" {
 				v.Password = set.Value
 			}
 		}
+		v.CFGWarning = warning
 	}
 	// Enforcement lives in the whitelist plugin's own config, not in a cvar.
 	if st, err := s.agent.WhitelistState(r.Context()); err == nil {
@@ -342,6 +521,16 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAccessWhitelistToggle(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	on := r.FormValue("enabled") == "1"
+	// Enforcing an empty whitelist locks every player out, including the
+	// operator flipping the switch. The page warns about it in prose; refusing
+	// the click is what actually prevents it.
+	if on {
+		if st, err := s.agent.WhitelistState(r.Context()); err == nil && len(st.SteamIDs) == 0 {
+			redirectFlash(w, r, "/access", "err",
+				"Add at least one SteamID before enforcing the whitelist — an empty enforced list rejects everyone, including you.")
+			return
+		}
+	}
 	if err := s.agent.SetWhitelistEnabled(r.Context(), on); err != nil {
 		redirectFlash(w, r, "/access", "err", "Could not change whitelist enforcement: "+err.Error())
 		return
@@ -579,11 +768,26 @@ func (s *Server) handleLoadoutPost(w http.ResponseWriter, r *http.Request) {
 		AgentT:   validAgent(r.FormValue("agent_t")),
 		AgentCT:  validAgent(r.FormValue("agent_ct")),
 	}
-	if err := s.agent.PutLoadout(r.Context(), u.SteamID64, lo); err != nil {
+	syncEnabled, warning, err := s.agent.PutLoadout(r.Context(), u.SteamID64, lo)
+	if err != nil {
 		redirectFlash(w, r, "/loadout", "err", "Save failed: "+err.Error())
 		return
 	}
 	s.store.Audit(u.Username, "loadout.save", "t="+lo.KnifeT+" ct="+lo.KnifeCT+" gloves="+lo.GlovesT+"/"+lo.GlovesCT+" agents="+lo.AgentT+"/"+lo.AgentCT)
+	if warning != "" {
+		// The selection is stored; only the push into WeaponPaints' database
+		// failed. Reporting it as a failed save sent players into a retry loop
+		// over something only an admin can fix.
+		redirectFlash(w, r, "/loadout", "err", "Loadout "+warning)
+		return
+	}
+	if !syncEnabled {
+		// Promising "it applies when you reconnect" is wrong when WeaponPaints
+		// has no database: nothing reaches the game server at all.
+		redirectFlash(w, r, "/loadout", "ok",
+			"Loadout saved to the panel — but skins sync is not set up yet, so it will not appear in game until an admin configures WeaponPaints.")
+		return
+	}
 	redirectFlash(w, r, "/loadout", "ok", "Loadout saved — it applies when you (re)connect. Use !wp in game to force a refresh.")
 }
 

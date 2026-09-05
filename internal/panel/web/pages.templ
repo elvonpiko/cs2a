@@ -8,10 +8,16 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 
 	if toast != nil && toast.Message != "" {
 		if toast.Kind == "ok" {
-			<div class="notice">{ toast.Message }</div>
+			<div class="notice" id="flash">{ toast.Message }</div>
 		} else {
-			<div class="error-box">{ toast.Message }</div>
+			<div class="error-box" id="flash">{ toast.Message }</div>
 		}
+	}
+	// A second cs2a block in server.cfg wins in-game over the one this page
+	// writes, so a save appears to do nothing. Saying so is the only way the
+	// operator can find out.
+	if v.CFGWarning != "" {
+		<div class="error-box">{ v.CFGWarning }</div>
 	}
 
 	<div class="grid cols-2">
@@ -23,7 +29,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				} else {
 					<span class="badge grey">open to everyone</span>
 				}
-				{' '}sv_password — applied live, no restart needed
+				sv_password — applied live, no restart needed
 			</p>
 			if v.Password != "" {
 				<div class="kv"><span class="k">Current password</span><span class="v mono">{ v.Password }</span></div>
@@ -50,7 +56,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				} else {
 					<span class="badge grey">inactive</span>
 				}
-				{' '}requires the CS2 Whitelist plugin
+				requires the CS2 Whitelist plugin
 			</p>
 			<div class="row between mt8">
 				<span class="faint">
@@ -63,9 +69,25 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 							<span class="track" aria-hidden="true"></span>
 							<span>Enforcing</span>
 						</button>
+					} else if v.WhitelistCount == 0 {
+						// The agent refuses to enforce an empty list, because
+						// that rejects every player including the operator. An
+						// enabled switch that always fails is worse than one the
+						// page explains: it stays off until there is an entry.
+						<button class="switch" type="button" disabled aria-disabled="true" title="Add at least one SteamID first">
+							<span class="track" aria-hidden="true"></span>
+							<span>Off</span>
+						</button>
 					} else {
 						<input type="hidden" name="enabled" value="1"/>
-						<button class="switch" type="submit" role="switch" aria-checked="false">
+						<button
+							class="switch"
+							type="submit"
+							role="switch"
+							aria-checked="false"
+							data-confirm-danger
+							data-confirm={ whitelistEnableWarning(v.WhitelistCount) }
+						>
 							<span class="track" aria-hidden="true"></span>
 							<span>Off</span>
 						</button>
@@ -133,9 +155,9 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 
 	if toast != nil && toast.Message != "" {
 		if toast.Kind == "ok" {
-			<div class="notice">{ toast.Message }</div>
+			<div class="notice" id="flash">{ toast.Message }</div>
 		} else {
-			<div class="error-box">{ toast.Message }</div>
+			<div class="error-box" id="flash">{ toast.Message }</div>
 		}
 	}
 
@@ -162,27 +184,35 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 
 		<div class="card">
 			<h2>Accounts</h2>
-			<p class="sub">{ fmtInt(len(v.Users)) } users</p>
-			<table class="tbl">
-				<thead><tr><th>User</th><th>Role</th><th>SteamID</th><th></th></tr></thead>
-				<tbody>
-					for _, u := range v.Users {
-						<tr>
-							<td>{ u.Username }</td>
-							<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
-							<td class="mono">{ u.SteamID }</td>
-							<td class="right">
-								if u.ID != selfID {
-									<form method="post" action="/users/delete" class="mt0">
-										<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
-										<button class="btn danger sm" type="submit" data-confirm={ "Delete user " + u.Username + "?" }>Delete</button>
-									</form>
-								}
-							</td>
-						</tr>
-					}
-				</tbody>
-			</table>
+			<p class="sub">{ fmtInt(len(v.Users)) } { plural(len(v.Users), "user", "users") }</p>
+			<div class="scroll-y">
+				<table class="tbl">
+					<thead><tr><th scope="col">User</th><th scope="col">Role</th><th scope="col">SteamID</th><th><span class="sr-only">Actions</span></th></tr></thead>
+					<tbody>
+						for _, u := range v.Users {
+							<tr>
+								<td>{ u.Username }</td>
+								<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
+								<td class="mono">
+									if u.SteamID != "" {
+										{ u.SteamID }
+									} else {
+										<span class="faint">not linked</span>
+									}
+								</td>
+								<td class="right">
+									if u.ID != selfID {
+										<form method="post" action="/users/delete" class="mt0">
+											<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
+											<button class="btn danger sm" type="submit" data-confirm={ "Delete user " + u.Username + "? They lose access to the panel immediately." }>Delete</button>
+										</form>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
 		</div>
 	</div>
 }
@@ -224,7 +254,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					<p class="sub">steamid <span class="mono">{ v.SteamID }</span></p>
 
 					<h3 class="lo-cat">Knife</h3>
-					<div class="lo-row" data-kind="knife_t" data-current={ v.KnifeT }>
+					<div class="lo-row">
 						for _, k := range v.KnifeNames {
 							<label class={ "item-card", templ.KV("selected", k.Value == v.KnifeT) }>
 								<input type="radio" name="knife_t" value={ k.Value } checked?={ k.Value == v.KnifeT }/>
@@ -239,7 +269,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					</div>
 
 					<h3 class="lo-cat">Gloves</h3>
-					<div class="lo-row" data-kind="gloves_t" data-current={ v.GlovesT }>
+					<div class="lo-row">
 						for _, g := range v.Gloves {
 							<label class={ "item-card", templ.KV("selected", g.Value == v.GlovesT) }>
 								<input type="radio" name="gloves_t" value={ g.Value } checked?={ g.Value == v.GlovesT }/>
@@ -254,7 +284,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					</div>
 
 					<h3 class="lo-cat">Agent</h3>
-					<div class="lo-row" data-kind="agent_t" data-current={ v.AgentT }>
+					<div class="lo-row">
 						for _, a := range v.AgentsT {
 							<label class={ "item-card", templ.KV("selected", a.Value == v.AgentT) }>
 								<input type="radio" name="agent_t" value={ a.Value } checked?={ a.Value == v.AgentT }/>
@@ -275,7 +305,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					<p class="sub">Pick different cosmetics for the counter-terrorist side</p>
 
 					<h3 class="lo-cat">Knife</h3>
-					<div class="lo-row" data-kind="knife_ct" data-current={ v.KnifeCT }>
+					<div class="lo-row">
 						for _, k := range v.KnifeNames {
 							<label class={ "item-card", templ.KV("selected", k.Value == v.KnifeCT) }>
 								<input type="radio" name="knife_ct" value={ k.Value } checked?={ k.Value == v.KnifeCT }/>
@@ -290,7 +320,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					</div>
 
 					<h3 class="lo-cat">Gloves</h3>
-					<div class="lo-row" data-kind="gloves_ct" data-current={ v.GlovesCT }>
+					<div class="lo-row">
 						for _, g := range v.Gloves {
 							<label class={ "item-card", templ.KV("selected", g.Value == v.GlovesCT) }>
 								<input type="radio" name="gloves_ct" value={ g.Value } checked?={ g.Value == v.GlovesCT }/>
@@ -305,7 +335,7 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 					</div>
 
 					<h3 class="lo-cat">Agent</h3>
-					<div class="lo-row" data-kind="agent_ct" data-current={ v.AgentCT }>
+					<div class="lo-row">
 						for _, a := range v.AgentsCT {
 							<label class={ "item-card", templ.KV("selected", a.Value == v.AgentCT) }>
 								<input type="radio" name="agent_ct" value={ a.Value } checked?={ a.Value == v.AgentCT }/>

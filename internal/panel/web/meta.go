@@ -16,6 +16,3 @@ type NavUser struct {
 
 // IsAdmin reports whether the nav user is an admin.
 func (n *NavUser) IsAdmin() bool { return n != nil && n.Role == "admin" }
-
-// Version is shown in the footer; set from the panel binary.
-var Version = "dev"

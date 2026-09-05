@@ -61,8 +61,15 @@ type APIError struct {
 	Message string
 }
 
+// Error returns the agent's message as-is. It deliberately does not prepend
+// "agent: 400:" — the agent's messages are written for the operator, and the
+// transport status only made the flash text harder to read (the user saw
+// "Map change failed: agent: 400: rcon: dial 127.0.0.1:27015: …").
 func (e *APIError) Error() string {
-	return fmt.Sprintf("agent: %d: %s", e.Status, e.Message)
+	if e.Message == "" {
+		return http.StatusText(e.Status)
+	}
+	return e.Message
 }
 
 func (c *AgentClient) do(ctx context.Context, method, path string, body, out any) error {
@@ -95,7 +102,7 @@ func (c *AgentClient) doTimeout(ctx context.Context, method, path string, body, 
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("agent: %w", friendlyErr(err, timeout))
+		return friendlyErr(err, timeout)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -103,10 +110,19 @@ func (c *AgentClient) doTimeout(ctx context.Context, method, path string, body, 
 			Error string `json:"error"`
 		}
 		msg := http.StatusText(resp.StatusCode)
-		if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&e); err == nil && e.Error != "" {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err := json.Unmarshal(raw, &e); err == nil && e.Error != "" {
 			msg = e.Error
 		}
-		return &APIError{Status: resp.StatusCode, Message: msg}
+		apiErr := &APIError{Status: resp.StatusCode, Message: msg}
+		// A 409 carries a structured ActionResult (a unit that would not
+		// start), which the caller needs in full to show the journal.
+		if out != nil && resp.StatusCode == http.StatusConflict {
+			if err := json.Unmarshal(raw, out); err == nil {
+				return apiErr
+			}
+		}
+		return apiErr
 	}
 	if out != nil {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
@@ -122,15 +138,12 @@ func friendlyErr(err error, timeout time.Duration) error {
 	case errors.Is(err, context.DeadlineExceeded):
 		return fmt.Errorf("the agent did not answer within %s — it may still be working; reload in a moment", timeout.Round(time.Second))
 	case errors.Is(err, syscall.ECONNREFUSED):
-		return errors.New("connection refused — is cs2a-agent running? (systemctl status cs2a-agent)")
+		return errors.New("cannot reach the cs2a agent — check it is running with: systemctl status cs2a-agent")
+	case errors.Is(err, context.Canceled):
+		return errors.New("the request was cancelled")
 	default:
-		return err
+		return fmt.Errorf("cannot reach the cs2a agent: %w", err)
 	}
-}
-
-// Health pings the agent.
-func (c *AgentClient) Health(ctx context.Context) error {
-	return c.do(ctx, http.MethodGet, "/api/v1/health", nil, nil)
 }
 
 // ServerStatus mirrors the agent's FullStatus payload.
@@ -155,15 +168,32 @@ type ServerStatus struct {
 			UserID    string `json:"user_id"`
 			Name      string `json:"name"`
 			SteamID   string `json:"steam_id"`
+			Addr      string `json:"addr"`
 			Connected string `json:"connected"`
 			Ping      int    `json:"ping"`
+			Loss      int    `json:"loss"`
 			State     string `json:"state"`
+			Bot       bool   `json:"bot"`
 		} `json:"players"`
 		Humans int `json:"humans"`
 		Bots   int `json:"bots"`
 		Max    int `json:"max"`
 	} `json:"rcon,omitempty"`
-	Note string `json:"note"`
+	Note string         `json:"note"`
+	Diag *RCONDiagnosis `json:"diag,omitempty"`
+}
+
+// RCONDiagnosis mirrors the agent's RCON diagnosis.
+type RCONDiagnosis struct {
+	OK               bool   `json:"ok"`
+	Addr             string `json:"addr"`
+	Reason           string `json:"reason"`
+	Fix              string `json:"fix"`
+	Repairable       bool   `json:"repairable"`
+	MissingUserCon   bool   `json:"missing_usercon"`
+	MissingPassword  bool   `json:"missing_password"`
+	SuggestedAddr    string `json:"suggested_addr"`
+	PasswordMismatch bool   `json:"password_mismatch"`
 }
 
 // Status fetches the composed server status.
@@ -175,18 +205,81 @@ func (c *AgentClient) Status(ctx context.Context) (*ServerStatus, error) {
 	return &st, nil
 }
 
-// ServerAction performs start/stop/restart.
-func (c *AgentClient) ServerAction(ctx context.Context, action string) error {
-	return c.doTimeout(ctx, http.MethodPost, "/api/v1/server/"+action, nil, nil, actionTimeout)
+// ActionResult mirrors the agent's verified lifecycle result.
+type ActionResult struct {
+	Action  string   `json:"action"`
+	Active  bool     `json:"active"`
+	Sub     string   `json:"sub"`
+	Message string   `json:"message"`
+	Failed  bool     `json:"failed"`
+	Log     []string `json:"log"`
 }
 
-// Exec runs a console command.
+// ServerAction performs start/stop/restart and reports what actually happened.
+// The agent verifies the unit settled, so a nil error here means the server
+// really reached the requested state.
+func (c *AgentClient) ServerAction(ctx context.Context, action string) (*ActionResult, error) {
+	var res ActionResult
+	err := c.doTimeout(ctx, http.MethodPost, "/api/v1/server/"+action, nil, &res, actionTimeout)
+	if err != nil {
+		if res.Message != "" {
+			// A 409 with a structured body: the message and journal are the
+			// answer, not the HTTP status.
+			return &res, errors.New(res.Message)
+		}
+		return nil, err
+	}
+	return &res, nil
+}
+
+// Logs fetches the tail of the game server's journal.
+func (c *AgentClient) Logs(ctx context.Context, n int) ([]string, error) {
+	var out struct {
+		Lines []string `json:"lines"`
+	}
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/v1/server/logs?n=%d", n), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Lines, nil
+}
+
+// RCONCheck asks the agent to diagnose RCON reachability.
+func (c *AgentClient) RCONCheck(ctx context.Context) (*RCONDiagnosis, error) {
+	var d RCONDiagnosis
+	if err := c.do(ctx, http.MethodGet, "/api/v1/server/rcon-check", nil, &d); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// RCONRepair applies the fixes the diagnosis identified and restarts the game
+// server. It returns what was changed and the resulting state.
+func (c *AgentClient) RCONRepair(ctx context.Context) ([]string, *ActionResult, *RCONDiagnosis, error) {
+	var out struct {
+		Applied []string       `json:"applied"`
+		Result  ActionResult   `json:"result"`
+		Rcon    *RCONDiagnosis `json:"rcon"`
+	}
+	if err := c.doTimeout(ctx, http.MethodPost, "/api/v1/server/rcon-repair", nil, &out, actionTimeout); err != nil {
+		return nil, nil, nil, err
+	}
+	return out.Applied, &out.Result, out.Rcon, nil
+}
+
+// Exec runs a console command. A truncated answer comes back as the partial
+// output with the agent's note appended, so a caller cannot mistake half a
+// cvarlist for the whole thing.
 func (c *AgentClient) Exec(ctx context.Context, command string) (string, error) {
 	var out struct {
-		Output string `json:"output"`
+		Output    string `json:"output"`
+		Truncated bool   `json:"truncated"`
+		Note      string `json:"note"`
 	}
 	if err := c.doTimeout(ctx, http.MethodPost, "/api/v1/server/exec", map[string]string{"command": command}, &out, actionTimeout); err != nil {
 		return "", err
+	}
+	if out.Truncated && out.Note != "" {
+		return out.Output + "\n\n[" + out.Note + "]", nil
 	}
 	return out.Output, nil
 }
@@ -212,22 +305,36 @@ type Setting struct {
 	Name    string `json:"name"`
 	Value   string `json:"value"`
 	Comment string `json:"comment,omitempty"`
+	// Bare marks a value-less line the operator wrote inside the managed block
+	// (the engine treats it as a query). It must survive a round trip through
+	// the panel, or saving any setting rewrites it as `name ""` — which sets
+	// that cvar to 0.
+	Bare bool `json:"bare,omitempty"`
 }
 
-// Settings returns managed settings.
-func (c *AgentClient) Settings(ctx context.Context) ([]Setting, error) {
+// Settings returns managed settings plus a warning when server.cfg is in a
+// state cs2a can write to but not fully control (today: a duplicate managed
+// block, whose second copy overrides everything the panel writes).
+func (c *AgentClient) Settings(ctx context.Context) ([]Setting, string, error) {
 	var out struct {
 		Settings []Setting `json:"settings"`
+		Warning  string    `json:"warning"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/api/v1/settings", nil, &out); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return out.Settings, nil
+	return out.Settings, out.Warning, nil
 }
 
-// PutSettings writes managed settings.
-func (c *AgentClient) PutSettings(ctx context.Context, settings []Setting) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/settings", map[string]any{"settings": settings}, nil)
+// PutSettings writes managed settings and returns the same warning.
+func (c *AgentClient) PutSettings(ctx context.Context, settings []Setting) (string, error) {
+	var out struct {
+		Warning string `json:"warning"`
+	}
+	if err := c.do(ctx, http.MethodPut, "/api/v1/settings", map[string]any{"settings": settings}, &out); err != nil {
+		return "", err
+	}
+	return out.Warning, nil
 }
 
 // SetPassword sets/clears sv_password.
@@ -244,6 +351,14 @@ type PluginEntry struct {
 	Kind        string   `json:"kind"`
 	Requires    []string `json:"requires"`
 	Homepage    string   `json:"homepage"`
+	// ConfigPath is non-empty when the plugin has a config file the panel can
+	// edit. Every card used to advertise a config editor unconditionally.
+	ConfigPath       string `json:"config_path"`
+	Installed        bool   `json:"installed"`
+	InstalledVersion string `json:"installed_version"`
+	// RequiredBy names installed components that depend on this one; while it
+	// is non-empty, uninstalling would break them.
+	RequiredBy []string `json:"required_by"`
 }
 
 // Plugins lists the catalog with installed annotations.
@@ -263,6 +378,9 @@ type InstallResult struct {
 	Version         string `json:"version"`
 	RequiresRestart bool   `json:"requires_restart"`
 	InstalledDeps   bool   `json:"installed_deps"`
+	// Warning is a non-fatal problem the operator should still see (a file the
+	// release did not ship, ownership that could not be aligned).
+	Warning string `json:"warning"`
 }
 
 // Install installs a plugin. Downloads run inside the request, so this uses
@@ -425,14 +543,22 @@ func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (*PlayerLo
 }
 
 // PutLoadout pushes a player's cosmetic selection to the agent (which syncs
-// to WeaponPaints' MySQL when configured).
-func (c *AgentClient) PutLoadout(ctx context.Context, steamid string, lo *PlayerLoadout) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/loadout/"+steamid,
+// to WeaponPaints' MySQL when configured). It reports whether that sync is
+// active: without it the selection is only stored locally and will not show up
+// in game, which the player has to be told. A non-empty warning means the save
+// succeeded but the sync did not, and says why.
+func (c *AgentClient) PutLoadout(ctx context.Context, steamid string, lo *PlayerLoadout) (syncEnabled bool, warning string, err error) {
+	var out struct {
+		SyncEnabled bool   `json:"sync_enabled"`
+		Warning     string `json:"warning"`
+	}
+	err = c.do(ctx, http.MethodPut, "/api/v1/loadout/"+steamid,
 		map[string]any{"loadout": map[string]any{
 			"knife_t": lo.KnifeT, "knife_ct": lo.KnifeCT,
 			"gloves_t": lo.GlovesT, "gloves_ct": lo.GlovesCT,
 			"agent_t": lo.AgentT, "agent_ct": lo.AgentCT,
-		}}, nil)
+		}}, &out)
+	return out.SyncEnabled, out.Warning, err
 }
 
 // PluginConfig fetches a plugin's config JSON (pretty-printed).

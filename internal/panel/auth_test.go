@@ -67,6 +67,8 @@ func TestAgentClientPaths(t *testing.T) {
 				w.Write([]byte(`{"maps":["de_dust2","de_mirage"]}`))
 			case "/api/v1/server/exec":
 				w.Write([]byte(`{"ok":true,"output":"hello"}`))
+			case "/api/v1/server/restart":
+				w.Write([]byte(`{"action":"restart","active":true,"sub":"running","message":"Server is running."}`))
 			case "/api/v1/plugins":
 				w.Write([]byte(`{"plugins":[{"id":"metamod","name":"Metamod:Source","kind":"runtime"}]}`))
 			case "/api/v1/plugins/weaponpaints/install":
@@ -117,9 +119,13 @@ func TestAgentClientPaths(t *testing.T) {
 		t.Fatalf("maps = %v %v", maps, err)
 	}
 
-	// actions + exec
-	if err := c.ServerAction(ctx, "restart"); err != nil {
+	// actions + exec: a lifecycle action reports the verified unit state
+	res, err := c.ServerAction(ctx, "restart")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !res.Active || res.Failed || res.Message == "" {
+		t.Fatalf("restart = %+v", res)
 	}
 	out, err := c.Exec(ctx, "mp_warmuptime 5")
 	if err != nil || out != "hello" {
@@ -131,9 +137,9 @@ func TestAgentClientPaths(t *testing.T) {
 	if err != nil || len(plugins) != 1 || plugins[0].Name != "Metamod:Source" {
 		t.Fatalf("plugins = %+v %v", plugins, err)
 	}
-	res, err := c.Install(ctx, "weaponpaints", false)
-	if err != nil || !res.RequiresRestart || res.Version != "v1.5.4" {
-		t.Fatalf("install = %+v %v", res, err)
+	ires, err := c.Install(ctx, "weaponpaints", false)
+	if err != nil || !ires.RequiresRestart || ires.Version != "v1.5.4" {
+		t.Fatalf("install = %+v %v", ires, err)
 	}
 
 	// whitelist round trip
@@ -146,7 +152,7 @@ func TestAgentClientPaths(t *testing.T) {
 	}
 
 	// loadout round trip (all six cosmetic fields)
-	if err := c.PutLoadout(ctx, "76561197961500295", &PlayerLoadout{
+	if _, _, err := c.PutLoadout(ctx, "76561197961500295", &PlayerLoadout{
 		KnifeT: "weapon_knife_karambit", KnifeCT: "weapon_bayonet",
 		GlovesT: "5032:10010", GlovesCT: "5031:10008",
 		AgentT: "tm_leet_variantf", AgentCT: "ctm_st6_variantj",
@@ -163,7 +169,7 @@ func TestAgentClientPaths(t *testing.T) {
 	if err := c.SetPassword(ctx, "pw"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.PutSettings(ctx, []Setting{{Name: "mp_maxrounds", Value: "24"}}); err != nil {
+	if _, err := c.PutSettings(ctx, []Setting{{Name: "mp_maxrounds", Value: "24"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.ChangeMap(ctx, "de_mirage", false); err != nil {

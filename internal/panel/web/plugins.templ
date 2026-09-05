@@ -8,15 +8,28 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []P
 
 	if toast != nil && toast.Message != "" {
 		if toast.Kind == "ok" {
-			<div class="notice">{ toast.Message }</div>
+			<div class="notice" id="flash">{ toast.Message }</div>
 		} else {
-			<div class="error-box">{ toast.Message }</div>
+			<div class="error-box" id="flash">{ toast.Message }</div>
 		}
 	}
 
 	@PluginJobs(jobs)
 
-	<div class="grid cols-3">
+	@PluginCards(entries, false)
+}
+
+// PluginCards is the catalog grid. It is a separate component so the job strip
+// can swap a fresh copy in out-of-band when an install finishes: the cards
+// otherwise kept saying "not installed" until the operator reloaded the page.
+templ PluginCards(entries []PluginCardView, oob bool) {
+	<div
+		class="grid cols-3"
+		id="plugin-grid"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
 		for _, e := range entries {
 			<div class="card plugin-card">
 				<div class="head">
@@ -43,9 +56,13 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []P
 						if e.HasConfig {
 							<a class="btn sm" href={ "/plugins/" + e.ID + "/config" }>Configure</a>
 						}
-						<form method="post" action={ "/plugins/" + e.ID + "/uninstall" } class="mt0">
-							<button class="btn danger sm" type="submit" data-confirm={ "Uninstall " + e.Name + "? This removes its files." }>Uninstall</button>
-						</form>
+						if len(e.RequiredBy) > 0 {
+							<span class="faint">Required by { joinList(e.RequiredBy) }</span>
+						} else {
+							<form method="post" action={ "/plugins/" + e.ID + "/uninstall" } class="mt0">
+								<button class="btn danger sm" type="submit" data-confirm={ "Uninstall " + e.Name + "? This removes its files." }>Uninstall</button>
+							</form>
+						}
 					} else {
 						<form method="post" action={ "/plugins/" + e.ID + "/install" } class="mt0">
 							<button class="btn primary sm" type="submit" data-confirm={ "Install " + e.Name + "?" }>Install</button>
@@ -63,9 +80,14 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []P
 // PluginJobs is the live install progress strip. It is polled while any job is
 // running and stops polling once everything settles, so installs that take
 // minutes report progress without the page holding a request open.
+//
+// aria-live makes it the announcement channel for installs too: the spinner is
+// decorative, so without it a screen-reader user was never told that a
+// multi-minute install had finished, failed, or needed a restart.
 templ PluginJobs(jobs []PluginJobView) {
 	<div
 		id="plugin-jobs"
+		aria-live="polite"
 		if AnyRunning(jobs) {
 			hx-get="/partials/plugin-jobs"
 			hx-trigger="every 2s"
@@ -84,6 +106,8 @@ templ PluginJobs(jobs []PluginJobView) {
 							<span class="spinner" aria-hidden="true"></span>
 						} else if j.Status == "failed" {
 							<span class="badge red">failed</span>
+						} else if j.Warning != "" {
+							<span class="badge orange">warning</span>
 						} else {
 							<span class="badge green">done</span>
 						}
@@ -92,6 +116,10 @@ templ PluginJobs(jobs []PluginJobView) {
 							<span class="step">{ j.Step }</span>
 						} else if j.Status == "failed" {
 							<span class="step">{ j.Message }</span>
+						} else if j.Warning != "" {
+							<span class="step">
+								installed { j.Version } — { j.Warning }
+							</span>
 						} else {
 							<span class="step">
 								installed { j.Version }
@@ -115,9 +143,9 @@ templ PluginConfigPage(nav *NavUser, toast *Toast, v PluginConfigView) {
 
 	if toast != nil && toast.Message != "" {
 		if toast.Kind == "ok" {
-			<div class="notice">{ toast.Message }</div>
+			<div class="notice" id="flash">{ toast.Message }</div>
 		} else {
-			<div class="error-box">{ toast.Message }</div>
+			<div class="error-box" id="flash">{ toast.Message }</div>
 		}
 	}
 

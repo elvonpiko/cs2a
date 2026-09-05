@@ -17,39 +17,28 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 	}
 
 	<div class="grid cols-2">
-		<div class="card" id="status-card" hx-get="/partials/status-card" hx-trigger="every 5s" hx-swap="outerHTML">
-			@StatusCard(v)
-		</div>
+		@StatusCard(v)
 
 		<div class="card">
 			<h2>Controls</h2>
 			<p class="sub">Applied instantly via the agent (RCON / systemd)</p>
 			if v.IsAdmin {
-				<div class="btn-row">
-					if v.Online {
-						<form method="post" action="/do/restart" class="mt0">
-							<button class="btn danger" type="submit" data-confirm="Restart the CS2 server?">Restart</button>
-						</form>
-						<form method="post" action="/do/stop" class="mt0">
-							<button class="btn danger" type="submit" data-confirm="Stop the CS2 server?">Stop</button>
-						</form>
-					} else {
-						<form method="post" action="/do/start" class="mt0">
-							<button class="btn success" type="submit">Start</button>
-						</form>
-					}
-				</div>
+				@LifecycleActions(v, false)
 				<hr class="divider"/>
 			}
 			<p class="sub-label">Change map</p>
-			<form method="post" action="/do/map" class="row">
-				<select name="map" class="fill" aria-label="Map">
-					for _, m := range v.Maps {
-						<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
-					}
-				</select>
-				<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
-			</form>
+			if len(v.Maps) == 0 {
+				<p class="hint">No maps were found on the server yet. Workshop maps appear here once they are downloaded.</p>
+			} else {
+				<form method="post" action="/do/map" class="row">
+					<select name="map" class="fill" aria-label="Map">
+						for _, m := range v.Maps {
+							<option value={ m } selected?={ m == v.CurrentMap }>{ m }</option>
+						}
+					</select>
+					<button class="btn primary" type="submit" data-confirm="Switch the live map now?">Apply</button>
+				</form>
+			}
 			<div class="card-foot">
 				if v.IsAdmin {
 					<p class="hint">Every action runs through the agent and lands in the audit trail.</p>
@@ -61,44 +50,13 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 	</div>
 
 	<div class="grid cols-2 section-gap">
-		<div class="card">
-			<h2>Online players</h2>
-			<p class="sub">Live from RCON status</p>
-			if len(v.PlayerList) == 0 {
-				<div class="empty grow">
-					<span class="glyph">◎</span>
-					<span>Nobody is connected right now</span>
-				</div>
-			} else {
-				<div class="grow scroll-y">
-					for _, p := range v.PlayerList {
-						<div class="player-pill">
-							<div>
-								{ p.Name }
-								if p.IsBot {
-									<span class="badge grey">BOT</span>
-								}
-							</div>
-							<div class="meta">
-								if p.SteamID != "" {
-									{ p.SteamID } · 
-								}
-								{ p.Connected } · { fmtInt(p.Ping) }ms
-							</div>
-						</div>
-					}
-				</div>
-			}
-			<div class="card-foot">
-				<p class="hint">Counts include bots. Player list refreshes with the status card.</p>
-			</div>
-		</div>
+		@PlayersCard(v, false)
 
 		<div class="card">
 			<h2>Connection</h2>
 			<p class="sub">Give this to your friends</p>
 			<div class="grow">
-				<div class="kv"><span class="k">Server</span><span class="v mono">{ v.Hostname }</span></div>
+				<div class="kv"><span class="k">Server</span><span class="v mono">{ orDash(v.Hostname) }</span></div>
 				<div class="kv"><span class="k">Slots</span><span class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</span></div>
 				<div class="kv"><span class="k">Panel</span><span class="v mono">cs2a { v.PanelVersion }</span></div>
 			</div>
@@ -107,9 +65,88 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 			</div>
 		</div>
 	</div>
+
+	if v.IsAdmin {
+		<div class="section-gap">
+			@ServerLogs(v)
+		</div>
+	}
+}
+
+// PlayersCard is the online-player list. Like the lifecycle row it is swapped
+// out-of-band by the status poll: the card used to promise "player list refreshes
+// with the status card" while only the counts in the status card actually moved,
+// so the page contradicted itself (4 / 10 players above a list of two names)
+// until someone reloaded.
+templ PlayersCard(v ServerView, oob bool) {
+	<div
+		class="card"
+		id="players-card"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<h2>Online players</h2>
+		<p class="sub">Live from RCON status</p>
+		if len(v.PlayerList) == 0 {
+			<div class="empty grow">
+				<span class="glyph">◎</span>
+				<span>Nobody is connected right now</span>
+			</div>
+		} else {
+			<div class="grow scroll-y">
+				for _, p := range v.PlayerList {
+					<div class="player-pill">
+						<div class="who">
+							{ p.Name }
+							if p.IsBot {
+								<span class="badge grey">BOT</span>
+							}
+						</div>
+						<div class="meta">{ p.Label() }</div>
+					</div>
+				}
+			</div>
+		}
+		<div class="card-foot">
+			<p class="hint">Counts include bots. This list refreshes with the status card.</p>
+		</div>
+	</div>
+}
+
+// LifecycleActions is the start/stop/restart row. It lives in its own component
+// because which buttons apply depends on whether the server is running, and that
+// answer changes underneath the operator: the status card polls every 5 s, so a
+// server that crashed showed "Server is stopped" next to a Restart/Stop pair
+// that could not work. The status partial now swaps this row out-of-band with
+// the same data it rendered itself.
+templ LifecycleActions(v ServerView, oob bool) {
+	<div
+		class="btn-row"
+		id="lifecycle-actions"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		if v.Online {
+			<form method="post" action="/do/restart" class="mt0">
+				<button class="btn danger" type="submit" data-confirm="Restart the CS2 server? Everyone connected is dropped.">Restart</button>
+			</form>
+			<form method="post" action="/do/stop" class="mt0">
+				<button class="btn danger" type="submit" data-confirm="Stop the CS2 server? Everyone connected is dropped and nobody can join until it is started again.">Stop</button>
+			</form>
+		} else {
+			<form method="post" action="/do/start" class="mt0">
+				<button class="btn success" type="submit">Start</button>
+			</form>
+		}
+	</div>
 }
 
 // StatusCard is the polled partial: the whole card is swapped in place.
+// The hx-get lives here and nowhere else — the page previously wrapped this
+// card in a second polling container, so every tick fired two requests and
+// swapped one card inside the other.
 templ StatusCard(v ServerView) {
 	<div class="card" id="status-card" hx-get="/partials/status-card" hx-trigger="every 5s" hx-swap="outerHTML">
 		<h2>Status</h2>
@@ -132,14 +169,29 @@ templ StatusCard(v ServerView) {
 				}
 			</div>
 		</div>
-		<div class="map-banner">
-			<img src={ mapImage(v.Map) } alt={ v.Map } onerror="this.style.display='none'"/>
-			<span class="map-label mono">{ v.Map }</span>
-		</div>
+		if v.Problem != "" {
+			<div class="problem" role="status">
+				<p class="problem-text">{ v.Problem }</p>
+				if v.ProblemFix != "" {
+					<p class="problem-fix">{ v.ProblemFix }</p>
+				}
+				if v.CanRepair && v.IsAdmin {
+					<form method="post" action="/do/rcon-repair" class="mt0">
+						<button class="btn primary sm" type="submit" data-confirm="Apply the fix and restart the CS2 server?">Fix it for me</button>
+					</form>
+				}
+			</div>
+		}
+		if v.Online {
+			<div class="map-banner">
+				<img src={ mapImage(v.Map) } alt={ v.Map } onerror="this.style.display='none'"/>
+				<span class="map-label mono">{ v.Map }</span>
+			</div>
+		}
 		<div class="stat-grid">
 			<div class="stat">
 				<div class="k">Current map</div>
-				<div class="v mono">{ v.Map }</div>
+				<div class="v mono">{ orDash(v.Map) }</div>
 			</div>
 			<div class="stat">
 				<div class="k">Players</div>
@@ -151,11 +203,51 @@ templ StatusCard(v ServerView) {
 			</div>
 			<div class="stat">
 				<div class="k">Uptime</div>
-				<div class="v">{ v.UptimeLabel }</div>
+				<div class="v">{ orDash(v.UptimeLabel) }</div>
 			</div>
 		</div>
-		if v.Note != "" {
-			<p class="faint mt14">query note: { v.Note }</p>
+		if v.Note != "" && v.Problem == "" {
+			<p class="faint mt14">{ v.Note }</p>
 		}
+	</div>
+	// The poll response carries the two regions that depend on the same data but
+	// live elsewhere on the page. htmx applies them by id, so a swap of one card
+	// keeps the whole page consistent.
+	if v.Polled {
+		if v.IsAdmin {
+			@LifecycleActions(v, true)
+		}
+		@PlayersCard(v, true)
+	}
+}
+
+// ServerLogs renders the tail of the game server's journal. It is a separate
+// partial so Refresh swaps just this card instead of reloading the page (which
+// dropped the flash message explaining why a start had failed).
+templ ServerLogs(v ServerView) {
+	<div class="card" id="server-logs">
+		<h2>Server log</h2>
+		<p class="sub">Last lines from the game server's systemd journal</p>
+		if len(v.LogLines) == 0 {
+			<div class="empty grow">
+				<span class="glyph">▤</span>
+				<span>No log output available</span>
+			</div>
+		} else {
+			<pre class="log-tail" aria-label="Server log">
+				for _, l := range v.LogLines {
+					{ l }{ "\n" }
+				}
+			</pre>
+		}
+		<div class="card-foot">
+			<button
+				class="btn ghost sm"
+				type="button"
+				hx-get="/partials/server-logs"
+				hx-target="#server-logs"
+				hx-swap="outerHTML"
+			>Refresh</button>
+		</div>
 	</div>
 }

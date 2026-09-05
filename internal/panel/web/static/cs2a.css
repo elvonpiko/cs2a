@@ -29,12 +29,18 @@
 	--text: #e9edf2;
 	--text-dim: #a8b2c1;
 	--muted: #7d8798;
-	--faint: #57606f;
+	/* --faint is for de-emphasised text that still has to be readable: hints,
+	   empty states, stat labels, table headers. It was #57606f, which measures
+	   under 3:1 on --surface — legible on the author's monitor, not on a laptop
+	   in daylight. #8b95a5 clears 4.5:1 against every surface in this file. */
+	--faint: #8b95a5;
+	/* --whisper is the genuinely decorative tier: separators and placeholder
+	   glyphs that carry no information. */
+	--whisper: #57606f;
 
 	/* signal (brand / primary / positive) */
 	--signal: #48e0b0;
 	--signal-bright: #6ff0c8;
-	--signal-deep: #0f5f4a;
 	--signal-wash: rgba(72, 224, 176, 0.12);
 	--signal-line: rgba(72, 224, 176, 0.32);
 	--on-signal: #04231b;
@@ -51,6 +57,7 @@
 	/* attention */
 	--amber: #f2c46b;
 	--amber-wash: rgba(242, 196, 107, 0.12);
+	--amber-line: rgba(242, 196, 107, 0.28);
 
 	--radius: 12px;
 	--radius-sm: 8px;
@@ -121,6 +128,25 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .topbar-inner {
 	max-width: 1120px; margin: 0 auto; padding: 0 24px;
 	display: flex; align-items: center; gap: 24px; height: 62px;
+}
+/* On a phone the bar's contents (brand + up to four links + user chip + Sign
+   out) need roughly 600px against ~310px of viewport, so it used to push the
+   whole document sideways and park Sign out off-screen. Wrapping to two rows and
+   letting the links scroll horizontally keeps everything reachable. */
+@media (max-width: 560px) {
+	.topbar-inner {
+		height: auto; flex-wrap: wrap; gap: 10px 14px;
+		padding: 10px 16px;
+	}
+	.nav-links {
+		order: 3; flex-basis: 100%;
+		overflow-x: auto; scrollbar-width: none;
+		-webkit-overflow-scrolling: touch;
+	}
+	.nav-links::-webkit-scrollbar { display: none; }
+	.nav-links a { flex: none; }
+	.userchip { margin-left: auto; }
+	.shell { padding-left: 16px; padding-right: 16px; }
 }
 
 /* brand: custom reticle mark + lowercase wordmark */
@@ -195,7 +221,6 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .card h2 { margin: 0 0 3px; font-size: 15px; font-weight: 620; }
 .card h3 { font-size: 14px; font-weight: 600; }
 .card .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
-.card.tight { padding: 16px 18px; }
 .card .divider { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
 .sub-label {
 	font-size: 10.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
@@ -205,7 +230,7 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 /* --- status ---------------------------------------------------------------- */
 
 .status-hero { display: flex; align-items: center; gap: 14px; }
-.status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--whisper); flex: none; }
 .status-dot.on { background: var(--signal); }
 .status-dot.off { background: var(--coral); box-shadow: 0 0 0 4px var(--coral-wash); }
 .status-dot.pulse { animation: pulse 2.4s ease-out infinite; }
@@ -330,6 +355,10 @@ textarea { resize: vertical; line-height: 1.6; }
 	transition: transform .22s var(--ease), background .2s var(--ease);
 }
 .switch:hover .track { border-color: rgba(255, 255, 255, 0.24); }
+/* A switch the panel refuses to flip (an empty whitelist) must look inert, not
+   merely fail on click. */
+.switch[disabled] { cursor: not-allowed; opacity: .5; }
+.switch[disabled]:hover .track { border-color: var(--line-strong); }
 .switch.on .track { background: var(--signal-wash); border-color: var(--signal-line); }
 .switch.on .track::after { transform: translateX(16px); background: var(--signal); }
 .switch.on { color: var(--text); }
@@ -372,19 +401,22 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 
 /* install progress strip */
 .job-strip { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+/* No entrance animation here on purpose: the strip is swapped whole every two
+   seconds while an install runs, so anything keyed to "appears" replays forever
+   (see the .shell > #plugin-jobs rule at the end of this file). */
 .job-row {
 	position: relative; overflow: hidden;
 	display: flex; align-items: center; gap: 12px;
 	padding: 11px 14px; border-radius: var(--radius-sm);
 	background: var(--surface); border: 1px solid var(--line);
 	font-size: 13px;
-	animation: rowIn .3s var(--ease) both;
 }
-@keyframes rowIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-.job-row .name { font-weight: 600; }
-.job-row .step { color: var(--muted); flex: 1 1 auto; }
+.job-row .name { font-weight: 600; flex: none; }
+/* A failed install's message is a full sentence, so the row wraps instead of
+   truncating the part that says what to do about it. */
+.job-row .step { color: var(--muted); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .job-row.running { border-color: var(--signal-line); }
-.job-row.failed { border-color: var(--coral-line); }
+.job-row.failed { border-color: var(--coral-line); align-items: flex-start; }
 .job-row.failed .step { color: var(--coral); }
 /* indeterminate sweep: upstream downloads report no reliable byte total */
 .job-row.running::after {
@@ -410,7 +442,14 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 	transition: border-color .14s var(--ease), background .14s var(--ease);
 }
 .player-pill:hover { border-color: var(--line-strong); background: var(--surface-2); }
-.player-pill .meta { color: var(--faint); font-size: 11.5px; font-family: var(--mono); text-align: right; }
+/* A Steam nickname is arbitrary and the meta line is ~190px of unbreakable
+   mono text (SteamID64 · connect time · ping). Without min-width:0 the row
+   refused to shrink and widened the whole page on a phone. */
+.player-pill .who { min-width: 0; overflow-wrap: anywhere; }
+.player-pill .meta {
+	color: var(--faint); font-size: 11.5px; font-family: var(--mono);
+	text-align: right; min-width: 0; overflow-wrap: anywhere;
+}
 
 .kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
 .kv:last-child { border-bottom: none; }
@@ -442,11 +481,35 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 	border: 1px solid transparent;
 	animation: rowIn .3s var(--ease) both;
 }
+@keyframes rowIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .error-box { background: var(--coral-wash); color: var(--coral); border-color: var(--coral-line); }
 .notice { background: var(--signal-wash); color: var(--signal); border-color: var(--signal-line); }
 .error-box::before, .notice::before { font-weight: 700; flex: none; }
 .error-box::before { content: "!"; }
 .notice::before { content: "✓"; }
+
+/* A diagnosed problem with an actionable fix, shown inside the status card.
+   Amber rather than red: the server exists and the panel knows the remedy. */
+.problem {
+	margin: 14px 0 0; padding: 12px 14px;
+	border: 1px solid var(--amber-line);
+	background: var(--amber-wash);
+	border-radius: var(--radius-sm);
+	display: flex; flex-direction: column; gap: 7px;
+}
+.problem-text { margin: 0; font-size: 13.5px; color: var(--amber); line-height: 1.45; }
+.problem-fix { margin: 0; font-size: 12.5px; color: var(--text-dim); line-height: 1.45; }
+.problem form { align-self: flex-start; }
+
+/* Journal tail: monospace, scrollable, never pushes the page wider. */
+.log-tail {
+	margin: 0; padding: 12px 14px; max-height: 320px; overflow: auto;
+	background: var(--bg-soft); border: 1px solid var(--line);
+	border-radius: var(--radius-sm);
+	font-family: var(--mono); font-size: 12px; line-height: 1.55;
+	color: var(--text-dim); white-space: pre-wrap; word-break: break-word;
+	scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent;
+}
 
 /* --- utilities ------------------------------------------------------------ */
 
@@ -458,6 +521,12 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .right { text-align: right; }
 .fill { flex: 1 1 auto; min-width: 0; }
 .tall { min-height: 200px; }
+/* Visible to screen readers only — for headers a sighted user reads from
+   context (an actions column) but assistive tech announces as blank. */
+.sr-only {
+	position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+	overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 
 /* --- auth pages ----------------------------------------------------------- */
 
@@ -528,6 +597,10 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 }
 .item-card:hover { transform: translateY(-2px); border-color: var(--line-strong); background: var(--surface-2); }
 .item-card input { position: absolute; opacity: 0; pointer-events: none; }
+/* The radio is hidden but still focusable, so the global :focus-visible outline
+   was being drawn on a transparent element: keyboard users had no idea which
+   tile they were on. The outline goes on the card instead. */
+.item-card:focus-within { outline: 2px solid var(--signal); outline-offset: 2px; }
 .item-card.selected { border-color: var(--signal); background: var(--signal-wash); }
 .item-card.selected::after {
 	content: ""; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px;
@@ -536,7 +609,7 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .item-img { width: 84px; height: 56px; object-fit: contain; border-radius: var(--radius-xs); }
 .item-img.placeholder {
 	display: flex; align-items: center; justify-content: center;
-	color: var(--faint); font-size: 16px; background: var(--surface-2);
+	color: var(--whisper); font-size: 16px; background: var(--surface-2);
 }
 .item-name {
 	font-size: 10.5px; line-height: 1.3; text-align: center; color: var(--muted);
@@ -591,13 +664,18 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .modal-actions .btn { min-width: 92px; }
 
 /* --- page entrance -------------------------------------------------------- */
-/* Top-level blocks of each page cascade in once per full render. htmx partial
-   swaps live below this level, so polling never re-triggers the entrance. */
+/* Top-level blocks of each page cascade in once per full render. */
 @keyframes pageRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .shell > * { animation: pageRise .38s var(--ease) both; }
 .shell > :nth-child(2) { animation-delay: .04s; }
 .shell > :nth-child(3) { animation-delay: .08s; }
 .shell > :nth-child(n+4) { animation-delay: .12s; }
+/* Polled regions are direct children of .shell, so every swap restarted the
+   entrance animation: the install strip the operator is watching faded to
+   opacity 0 and slid 10px every two seconds, and the out-of-band card grid
+   flashed the whole catalog. Regions that refresh themselves never animate. */
+.shell > #plugin-jobs,
+.shell > #plugin-grid { animation: none; }
 
 /* --- reduced motion ------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
