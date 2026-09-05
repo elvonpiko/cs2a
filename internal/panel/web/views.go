@@ -17,6 +17,22 @@ func fmtInt(n int) string { return strconv.Itoa(n) }
 // fmtInt64 renders an int64 for templ attribute values.
 func fmtInt64(n int64) string { return strconv.FormatInt(n, 10) }
 
+// ariaCurrent renders the aria-current attribute value for nav links.
+func ariaCurrent(active bool) string {
+	if active {
+		return "page"
+	}
+	return "false"
+}
+
+// plural picks the singular or plural word for n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
 // ServerView is the view model for the server page (both roles).
 type ServerView struct {
 	Online       bool
@@ -63,6 +79,28 @@ type PluginCardView struct {
 	Version     string
 	HasConfig   bool
 	Requires    []string
+}
+
+// PluginJobView is one in-flight or recently finished install.
+type PluginJobView struct {
+	ID              string
+	Name            string
+	Status          string // running | done | failed
+	Step            string
+	Message         string
+	Version         string
+	Running         bool
+	RequiresRestart bool
+}
+
+// AnyRunning reports whether at least one job is still working (drives polling).
+func AnyRunning(jobs []PluginJobView) bool {
+	for _, j := range jobs {
+		if j.Running {
+			return true
+		}
+	}
+	return false
 }
 
 // UsersView is the admin users page model.
@@ -120,6 +158,7 @@ type AccessView struct {
 	Password        string
 	WhitelistActive bool
 	WhitelistText   string
+	WhitelistCount  int
 	Users           []UserRow
 }
 

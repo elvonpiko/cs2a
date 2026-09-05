@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -18,12 +21,37 @@ type AgentClient struct {
 	HTTP  *http.Client
 }
 
-// NewAgentClient builds a client with sane defaults.
+// Per-operation deadlines. The agent runs long jobs synchronously (a plugin
+// install downloads tens of megabytes and unpacks them; a map change stalls
+// the game server), so a single short client timeout is what produced the
+// "timeout" errors in the UI. Each call now picks a budget that matches the
+// work instead.
+const (
+	// quickTimeout covers reads and cheap writes (status, settings, whitelist).
+	quickTimeout = 15 * time.Second
+	// actionTimeout covers systemd start/stop/restart, RCON commands and map
+	// changes: the game server can be busy for a while.
+	actionTimeout = 90 * time.Second
+	// installTimeout covers plugin download + extraction (CounterStrikeSharp
+	// with-runtime is ~50 MB and expands to a few hundred).
+	installTimeout = 20 * time.Minute
+)
+
+// NewAgentClient builds a client with no global timeout: every call sets its
+// own deadline via context so slow operations are not cut short while fast
+// ones still fail quickly.
 func NewAgentClient(base, token string) *AgentClient {
 	return &AgentClient{
 		Base:  strings.TrimRight(base, "/"),
 		Token: token,
-		HTTP:  &http.Client{Timeout: 15 * time.Second},
+		HTTP: &http.Client{
+			Transport: &http.Transport{
+				DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+				ResponseHeaderTimeout: 0, // bounded per call by context
+				MaxIdleConnsPerHost:   4,
+				IdleConnTimeout:       60 * time.Second,
+			},
+		},
 	}
 }
 
@@ -38,6 +66,17 @@ func (e *APIError) Error() string {
 }
 
 func (c *AgentClient) do(ctx context.Context, method, path string, body, out any) error {
+	return c.doTimeout(ctx, method, path, body, out, quickTimeout)
+}
+
+// doTimeout performs a request with an explicit per-operation deadline. When
+// the caller's context already has an earlier deadline, that one wins.
+func (c *AgentClient) doTimeout(ctx context.Context, method, path string, body, out any, timeout time.Duration) error {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -56,7 +95,7 @@ func (c *AgentClient) do(ctx context.Context, method, path string, body, out any
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("agent: %w", err)
+		return fmt.Errorf("agent: %w", friendlyErr(err, timeout))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -75,6 +114,18 @@ func (c *AgentClient) do(ctx context.Context, method, path string, body, out any
 		}
 	}
 	return nil
+}
+
+// friendlyErr turns transport failures into messages an operator can act on.
+func friendlyErr(err error, timeout time.Duration) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("the agent did not answer within %s — it may still be working; reload in a moment", timeout.Round(time.Second))
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return errors.New("connection refused — is cs2a-agent running? (systemctl status cs2a-agent)")
+	default:
+		return err
+	}
 }
 
 // Health pings the agent.
@@ -126,7 +177,7 @@ func (c *AgentClient) Status(ctx context.Context) (*ServerStatus, error) {
 
 // ServerAction performs start/stop/restart.
 func (c *AgentClient) ServerAction(ctx context.Context, action string) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/server/"+action, nil, nil)
+	return c.doTimeout(ctx, http.MethodPost, "/api/v1/server/"+action, nil, nil, actionTimeout)
 }
 
 // Exec runs a console command.
@@ -134,7 +185,7 @@ func (c *AgentClient) Exec(ctx context.Context, command string) (string, error) 
 	var out struct {
 		Output string `json:"output"`
 	}
-	if err := c.do(ctx, http.MethodPost, "/api/v1/server/exec", map[string]string{"command": command}, &out); err != nil {
+	if err := c.doTimeout(ctx, http.MethodPost, "/api/v1/server/exec", map[string]string{"command": command}, &out, actionTimeout); err != nil {
 		return "", err
 	}
 	return out.Output, nil
@@ -153,7 +204,7 @@ func (c *AgentClient) Maps(ctx context.Context) ([]string, error) {
 
 // ChangeMap switches the map.
 func (c *AgentClient) ChangeMap(ctx context.Context, mapName string, force bool) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/map", map[string]any{"map": mapName, "force": force}, nil)
+	return c.doTimeout(ctx, http.MethodPost, "/api/v1/map", map[string]any{"map": mapName, "force": force}, nil, actionTimeout)
 }
 
 // Setting is one managed server.cfg cvar.
@@ -214,10 +265,11 @@ type InstallResult struct {
 	InstalledDeps   bool   `json:"installed_deps"`
 }
 
-// Install installs a plugin.
+// Install installs a plugin. Downloads run inside the request, so this uses
+// the long install budget.
 func (c *AgentClient) Install(ctx context.Context, id string, force bool) (*InstallResult, error) {
 	var res InstallResult
-	if err := c.do(ctx, http.MethodPost, "/api/v1/plugins/"+id+"/install", map[string]bool{"force": force}, &res); err != nil {
+	if err := c.doTimeout(ctx, http.MethodPost, "/api/v1/plugins/"+id+"/install", map[string]bool{"force": force}, &res, installTimeout); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -225,23 +277,91 @@ func (c *AgentClient) Install(ctx context.Context, id string, force bool) (*Inst
 
 // Uninstall removes a plugin.
 func (c *AgentClient) Uninstall(ctx context.Context, id string) error {
-	return c.do(ctx, http.MethodDelete, "/api/v1/plugins/"+id, nil, nil)
+	return c.doTimeout(ctx, http.MethodDelete, "/api/v1/plugins/"+id, nil, nil, actionTimeout)
+}
+
+// WhitelistState is the agent's whitelist file plus its enforcement switch.
+type WhitelistState struct {
+	SteamIDs []string `json:"steamids"`
+	Enabled  bool     `json:"enabled"`
+}
+
+// WhitelistState returns the whitelist entries and whether the plugin is
+// enforcing them.
+func (c *AgentClient) WhitelistState(ctx context.Context) (*WhitelistState, error) {
+	var out WhitelistState
+	if err := c.do(ctx, http.MethodGet, "/api/v1/whitelist", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // Whitelist returns the agent-side whitelist file contents.
 func (c *AgentClient) Whitelist(ctx context.Context) ([]string, error) {
-	var out struct {
-		SteamIDs []string `json:"steamids"`
-	}
-	if err := c.do(ctx, http.MethodGet, "/api/v1/whitelist", nil, &out); err != nil {
+	st, err := c.WhitelistState(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return out.SteamIDs, nil
+	return st.SteamIDs, nil
 }
 
 // PutWhitelist replaces the whitelist.
 func (c *AgentClient) PutWhitelist(ctx context.Context, ids []string) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/whitelist", map[string]any{"steamids": ids}, nil)
+}
+
+// SetWhitelistEnabled toggles whitelist enforcement in the plugin's config.
+func (c *AgentClient) SetWhitelistEnabled(ctx context.Context, on bool) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/whitelist/enabled", map[string]bool{"enabled": on}, nil)
+}
+
+// Job mirrors the agent's async job record.
+type Job struct {
+	ID       string         `json:"id"`
+	Kind     string         `json:"kind"`
+	Target   string         `json:"target"`
+	Label    string         `json:"label"`
+	Status   string         `json:"status"` // running | done | failed
+	Step     string         `json:"step"`
+	Message  string         `json:"message"`
+	Result   *InstallResult `json:"result"`
+	Started  time.Time      `json:"started"`
+	Finished time.Time      `json:"finished"`
+}
+
+// Running reports whether the job is still in flight.
+func (j *Job) Running() bool { return j.Status == "running" }
+
+// InstallAsync starts a background install on the agent and returns the job.
+// The HTTP request itself returns immediately, so no proxy or client timeout
+// can interrupt a long download.
+func (c *AgentClient) InstallAsync(ctx context.Context, id string, force bool) (*Job, error) {
+	var job Job
+	if err := c.do(ctx, http.MethodPost, "/api/v1/plugins/"+id+"/install",
+		map[string]bool{"force": force, "async": true}, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// JobStatus fetches one job.
+func (c *AgentClient) JobStatus(ctx context.Context, id string) (*Job, error) {
+	var job Job
+	if err := c.do(ctx, http.MethodGet, "/api/v1/jobs/"+id, nil, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// Jobs lists retained jobs (running first by recency).
+func (c *AgentClient) Jobs(ctx context.Context) ([]Job, error) {
+	var out struct {
+		Jobs []Job `json:"jobs"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/v1/jobs", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Jobs, nil
 }
 
 // PlayerLoadout is the agent-side loadout for one steamid.

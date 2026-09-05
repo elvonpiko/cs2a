@@ -1,6 +1,6 @@
 package web
 
-templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView) {
+templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView, jobs []PluginJobView) {
 	<div class="page-head">
 		<h1>Plugins</h1>
 		<p>Install and manage server-side components. Installs are resolved against live upstream releases.</p>
@@ -13,6 +13,8 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView) {
 			<div class="error-box">{ toast.Message }</div>
 		}
 	}
+
+	@PluginJobs(jobs)
 
 	<div class="grid cols-3">
 		for _, e := range entries {
@@ -53,6 +55,53 @@ templ PluginsPage(nav *NavUser, toast *Toast, entries []PluginCardView) {
 						<a class="btn ghost sm" href={ e.Homepage } target="_blank" rel="noopener">Docs</a>
 					}
 				</div>
+			</div>
+		}
+	</div>
+}
+
+// PluginJobs is the live install progress strip. It is polled while any job is
+// running and stops polling once everything settles, so installs that take
+// minutes report progress without the page holding a request open.
+templ PluginJobs(jobs []PluginJobView) {
+	<div
+		id="plugin-jobs"
+		if AnyRunning(jobs) {
+			hx-get="/partials/plugin-jobs"
+			hx-trigger="every 2s"
+			hx-swap="outerHTML"
+		}
+	>
+		if len(jobs) > 0 {
+			<div class="job-strip">
+				for _, j := range jobs {
+					<div
+						class={ "job-row",
+							templ.KV("running", j.Running),
+							templ.KV("failed", j.Status == "failed") }
+					>
+						if j.Running {
+							<span class="spinner" aria-hidden="true"></span>
+						} else if j.Status == "failed" {
+							<span class="badge red">failed</span>
+						} else {
+							<span class="badge green">done</span>
+						}
+						<span class="name">{ j.Name }</span>
+						if j.Running {
+							<span class="step">{ j.Step }</span>
+						} else if j.Status == "failed" {
+							<span class="step">{ j.Message }</span>
+						} else {
+							<span class="step">
+								installed { j.Version }
+								if j.RequiresRestart {
+									{ " — restart the server to load it" }
+								}
+							</span>
+						}
+					</div>
+				}
 			</div>
 		}
 	</div>

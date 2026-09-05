@@ -50,8 +50,29 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				} else {
 					<span class="badge grey">inactive</span>
 				}
-				{' '}requires the CS2 Whitelist plugin; empty list = open server
+				{' '}requires the CS2 Whitelist plugin
 			</p>
+			<div class="row between mt8">
+				<span class="faint">
+					{ fmtInt(v.WhitelistCount) } allowed { plural(v.WhitelistCount, "player", "players") }
+				</span>
+				<form method="post" action="/access/whitelist/toggle" class="switch-form mt0">
+					if v.WhitelistActive {
+						<input type="hidden" name="enabled" value="0"/>
+						<button class="switch on" type="submit" role="switch" aria-checked="true">
+							<span class="track" aria-hidden="true"></span>
+							<span>Enforcing</span>
+						</button>
+					} else {
+						<input type="hidden" name="enabled" value="1"/>
+						<button class="switch" type="submit" role="switch" aria-checked="false">
+							<span class="track" aria-hidden="true"></span>
+							<span>Off</span>
+						</button>
+					}
+				</form>
+			</div>
+			<hr class="divider"/>
 			<form method="post" action="/access/whitelist" class="grow">
 				<label class="field">
 					<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
@@ -62,7 +83,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 						<button class="btn primary" type="submit">Save whitelist</button>
 						<a class="btn ghost" href="/users">Pick from panel users</a>
 					</div>
-					<p class="hint" style="margin-top:8px">Entries are normalized to SteamID64. Players linked in the panel appear here with one click.</p>
+					<p class="hint" style="margin-top:8px">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
 				</div>
 			</form>
 		</div>

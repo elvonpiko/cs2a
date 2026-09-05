@@ -202,29 +202,62 @@ func (s *Server) handlePluginsPage(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		return // redirected with flash
 	}
-	comp := web.Base("Plugins", navFor(u, "plugins"), web.PluginsPage(navFor(u, "plugins"), flash(r), entries))
+	jobs := s.pluginJobViews(r)
+	comp := web.Base("Plugins", navFor(u, "plugins"), web.PluginsPage(navFor(u, "plugins"), flash(r), entries, jobs))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render plugins", "err", err)
+	}
+}
+
+// pluginJobViews lists in-flight and recently finished installs for the page's
+// live progress strip.
+func (s *Server) pluginJobViews(r *http.Request) []web.PluginJobView {
+	jobs, err := s.agent.Jobs(r.Context())
+	if err != nil {
+		return nil
+	}
+	out := make([]web.PluginJobView, 0, len(jobs))
+	for _, j := range jobs {
+		name := j.Label
+		if name == "" {
+			name = j.Target
+		}
+		v := web.PluginJobView{
+			ID:      j.ID,
+			Name:    name,
+			Status:  j.Status,
+			Step:    j.Step,
+			Message: j.Message,
+			Running: j.Running(),
+		}
+		if j.Result != nil {
+			v.Version = j.Result.Version
+			v.RequiresRestart = j.Result.RequiresRestart
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// handlePluginJobsPartial is polled by the plugins page while an install runs.
+func (s *Server) handlePluginJobsPartial(w http.ResponseWriter, r *http.Request) {
+	if err := web.PluginJobs(s.pluginJobViews(r)).Render(r.Context(), w); err != nil {
+		s.log.Error("render plugin jobs", "err", err)
 	}
 }
 
 func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	id := r.PathValue("id")
-	res, err := s.agent.Install(r.Context(), id, false)
+	// Installs run as a background job on the agent: downloads take minutes,
+	// which no HTTP request (or reverse proxy) should be asked to hold open.
+	job, err := s.agent.InstallAsync(r.Context(), id, false)
 	if err != nil {
 		redirectFlash(w, r, "/plugins", "err", "Install failed: "+err.Error())
 		return
 	}
-	s.store.Audit(u.Username, "plugin.install", id+"@"+res.Version)
-	msg := "Installed " + id + " " + res.Version
-	if res.InstalledDeps {
-		msg += " (with dependencies)"
-	}
-	if res.RequiresRestart {
-		msg += ". A server restart is required to load it."
-	}
-	redirectFlash(w, r, "/plugins", "ok", msg)
+	s.store.Audit(u.Username, "plugin.install.start", id+" job="+job.ID)
+	redirectFlash(w, r, "/plugins", "ok", "Installing "+id+" — progress appears below, you can leave this page.")
 }
 
 func (s *Server) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
@@ -283,14 +316,13 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 			if set.Name == "sv_password" && set.Value != "0" && set.Value != "" {
 				v.Password = set.Value
 			}
-			if set.Name == "mm_whitelist_enable" {
-				v.WhitelistActive = set.Value == "1"
-			}
 		}
 	}
-	if ids, err := s.agent.Whitelist(r.Context()); err == nil {
-		v.WhitelistText = strings.Join(ids, "\n")
-		v.WhitelistActive = v.WhitelistActive && len(ids) > 0
+	// Enforcement lives in the whitelist plugin's own config, not in a cvar.
+	if st, err := s.agent.WhitelistState(r.Context()); err == nil {
+		v.WhitelistText = strings.Join(st.SteamIDs, "\n")
+		v.WhitelistActive = st.Enabled
+		v.WhitelistCount = len(st.SteamIDs)
 	}
 	if users, err := s.store.ListUsers(); err == nil {
 		for _, uu := range users {
@@ -304,6 +336,22 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render access", "err", err)
 	}
+}
+
+// handleAccessWhitelistToggle switches whitelist enforcement on or off.
+func (s *Server) handleAccessWhitelistToggle(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	on := r.FormValue("enabled") == "1"
+	if err := s.agent.SetWhitelistEnabled(r.Context(), on); err != nil {
+		redirectFlash(w, r, "/access", "err", "Could not change whitelist enforcement: "+err.Error())
+		return
+	}
+	state := "disabled"
+	if on {
+		state = "enabled"
+	}
+	s.store.Audit(u.Username, "access.whitelist.enabled", state)
+	redirectFlash(w, r, "/access", "ok", "Whitelist "+state+".")
 }
 
 func (s *Server) handleAccessPassword(w http.ResponseWriter, r *http.Request) {
@@ -447,8 +495,11 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 
 // --- loadout -------------------------------------------------------------------
 
-// knifeCatalog is the WeaponPaints-compatible knife model list (model names
-// verified against the plugin's defindex map).
+// knifeCatalog is the WeaponPaints-compatible knife model list. Class names and
+// labels are verified against the game's item schema: weapon_knife_outdoor is
+// the Nomad Knife and weapon_knife_gypsy_jackknife is the Navaja Knife, which
+// is easy to get backwards (both were previously mislabelled here, leaving two
+// entries called "Skeleton Knife" and no Navaja).
 var knifeCatalog = []web.KnifeOption{
 	{Value: "default", Label: "Default knife"},
 	{Value: "weapon_bayonet", Label: "Bayonet"},
@@ -465,8 +516,8 @@ var knifeCatalog = []web.KnifeOption{
 	{Value: "weapon_knife_cord", Label: "Paracord Knife"},
 	{Value: "weapon_knife_canis", Label: "Survival Knife"},
 	{Value: "weapon_knife_ursus", Label: "Ursus Knife"},
-	{Value: "weapon_knife_gypsy_jackknife", Label: "Nomad Knife"},
-	{Value: "weapon_knife_outdoor", Label: "Skeleton Knife"},
+	{Value: "weapon_knife_gypsy_jackknife", Label: "Navaja Knife"},
+	{Value: "weapon_knife_outdoor", Label: "Nomad Knife"},
 	{Value: "weapon_knife_stiletto", Label: "Stiletto Knife"},
 	{Value: "weapon_knife_widowmaker", Label: "Talon Knife"},
 	{Value: "weapon_knife_skeleton", Label: "Skeleton Knife"},

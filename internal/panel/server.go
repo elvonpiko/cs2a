@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.auth(s.handleServerPage))
 	mux.HandleFunc("GET /partials/status-card", s.auth(s.handleStatusCardPartial))
 	mux.HandleFunc("GET /plugins", s.admin(s.handlePluginsPage))
+	mux.HandleFunc("GET /partials/plugin-jobs", s.admin(s.handlePluginJobsPartial))
 	mux.HandleFunc("GET /plugins/{id}/config", s.admin(s.handlePluginConfigPage))
 	mux.HandleFunc("POST /plugins/{id}/config", s.admin(s.handlePluginConfigPost))
 	mux.HandleFunc("POST /plugins/{id}/install", s.admin(s.handlePluginInstall))
@@ -70,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /access", s.admin(s.handleAccessPage))
 	mux.HandleFunc("POST /access/password", s.admin(s.handleAccessPassword))
 	mux.HandleFunc("POST /access/whitelist", s.admin(s.handleAccessWhitelist))
+	mux.HandleFunc("POST /access/whitelist/toggle", s.admin(s.handleAccessWhitelistToggle))
 	mux.HandleFunc("POST /access/whitelist/add-user", s.admin(s.handleAccessWhitelistAddUser))
 	mux.HandleFunc("GET /users", s.admin(s.handleUsersPage))
 	mux.HandleFunc("POST /users/create", s.admin(s.handleUserCreate))
@@ -83,11 +86,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /do/restart", s.admin(s.handleServerAction("restart")))
 	mux.HandleFunc("POST /do/map", s.auth(s.handleMapChange))
 
-	return s.logMiddleware(mux)
+	return s.logMiddleware(s.csrfMiddleware(mux))
 }
 
 // --- middleware ---------------------------------------------------------
 
+// statusRecorder captures the response status for logging. It forwards the
+// optional writer interfaces (Flush, Unwrap) so streaming responses and
+// htmx polling are not buffered by the wrapper.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -96,6 +102,36 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush lets handlers stream (http.Flusher is not promoted through embedding
+// when the wrapper is passed as a plain ResponseWriter).
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the underlying writer to http.ResponseController.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// csrfMiddleware rejects cross-site state-changing requests. Go's
+// CrossOriginProtection checks Sec-Fetch-Site (with an Origin fallback), which
+// covers every browser the panel targets and needs no per-form tokens.
+func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
+	p := http.NewCrossOriginProtection()
+	// The panel is commonly reached both directly and through a reverse proxy
+	// hostname; trust the configured public origin when one is set.
+	for _, origin := range s.cfg.TrustedOrigins() {
+		if err := p.AddTrustedOrigin(origin); err != nil {
+			s.log.Warn("ignoring invalid trusted origin", "origin", origin, "err", err)
+		}
+	}
+	p.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.log.Warn("cross-origin request denied", "path", r.URL.Path, "origin", r.Header.Get("Origin"))
+		http.Error(w, "cross-origin request denied — open the panel from its own address and try again", http.StatusForbidden)
+	}))
+	return p.Handler(next)
 }
 
 func (s *Server) logMiddleware(next http.Handler) http.Handler {
@@ -214,6 +250,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		Value:    tok,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.cfg.SecureCookies(),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(SessionTTL.Seconds()),
 	})
@@ -317,15 +354,14 @@ func flash(r *http.Request) *web.Toast {
 
 // redirectFlash redirects with a flash message.
 func redirectFlash(w http.ResponseWriter, r *http.Request, path, kind, msg string) {
-	sep := "?"
-	if strings.Contains(path, "?") {
-		sep = "&"
+	target := path
+	if u, err := url.Parse(path); err == nil {
+		q := u.Query()
+		q.Set(kind, msg)
+		u.RawQuery = q.Encode()
+		target = u.String()
 	}
-	http.Redirect(w, r, path+sep+kind+"="+escaped(msg), http.StatusSeeOther)
-}
-
-func escaped(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "&", "%26"), "+", "%2B")
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 var panelVersion = version.Version

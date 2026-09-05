@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,8 @@ type fakeAgent struct {
 	password   string
 	changemap  string
 	whitelist  []string
+	wlEnabled  bool
+	installs   int
 	loadout    map[string][2]string
 	plugins    string
 }
@@ -114,7 +117,23 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if !check(w, r) {
 			return
 		}
-		w.Write([]byte(`{"steamids":["76561197960287930"]}`))
+		f.mu.Lock()
+		enabled := f.wlEnabled
+		f.mu.Unlock()
+		w.Write([]byte(`{"steamids":["76561197960287930"],"enabled":` + strconv.FormatBool(enabled) + `}`))
+	})
+	mux.HandleFunc("PUT /api/v1/whitelist/enabled", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.wlEnabled = req.Enabled
+		f.mu.Unlock()
+		w.Write([]byte(`{"ok":true}`))
 	})
 	mux.HandleFunc("GET /api/v1/plugins", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -122,11 +141,38 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		}
 		w.Write([]byte(f.plugins))
 	})
+	// installs are async: the agent answers 202 with a job, and the panel
+	// polls /api/v1/jobs while the download runs
 	mux.HandleFunc("POST /api/v1/plugins/weaponpaints/install", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
 			return
 		}
-		w.Write([]byte(`{"id":"weaponpaints","version":"v1.5.4","requires_restart":true,"installed_deps":true}`))
+		var req struct {
+			Async bool `json:"async"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if !req.Async {
+			w.Write([]byte(`{"id":"weaponpaints","version":"build-459","requires_restart":true,"installed_deps":true}`))
+			return
+		}
+		f.mu.Lock()
+		f.installs++
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte(`{"id":"job1","kind":"install","target":"weaponpaints","label":"WeaponPaints","status":"running","step":"downloading"}`))
+	})
+	mux.HandleFunc("GET /api/v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		f.mu.Lock()
+		n := f.installs
+		f.mu.Unlock()
+		if n == 0 {
+			w.Write([]byte(`{"jobs":[]}`))
+			return
+		}
+		w.Write([]byte(`{"jobs":[{"id":"job1","kind":"install","target":"weaponpaints","label":"WeaponPaints","status":"running","step":"downloading WeaponPaints build-459"}]}`))
 	})
 	mux.HandleFunc("DELETE /api/v1/plugins/weaponpaints", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -138,7 +184,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if !check(w, r) {
 			return
 		}
-		w.Write([]byte(`{"settings":[{"name":"sv_password","value":"hunter2"},{"name":"mm_whitelist_enable","value":"1"}]}`))
+		w.Write([]byte(`{"settings":[{"name":"sv_password","value":"hunter2"},{"name":"sv_cheats","value":"0"}]}`))
 	})
 	mux.HandleFunc("PUT /api/v1/loadout/", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -235,6 +281,16 @@ func get(t *testing.T, client *http.Client, url string) *http.Response {
 	}
 	resp.Body.Close()
 	return resp
+}
+
+// getBody fetches a page and returns its body (get closes it).
+func getBody(t *testing.T, client *http.Client, url string) string {
+	t.Helper()
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return readAll(t, resp)
 }
 
 func postForm(t *testing.T, client *http.Client, url string, vals url.Values) *http.Response {
@@ -398,7 +454,7 @@ func TestPanelRolesAndActions(t *testing.T) {
 }
 
 func TestPanelPluginsFlow(t *testing.T) {
-	client, _, base := newPanelTest(t)
+	client, fa, base := newPanelTest(t)
 	_ = get(t, client, base+"/setup")
 	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
 	loginAs(t, client, base, "admin", "password123")
@@ -411,11 +467,116 @@ func TestPanelPluginsFlow(t *testing.T) {
 	if !strings.Contains(body, "WeaponPaints") || !strings.Contains(body, "Metamod:Source") {
 		t.Fatalf("plugins page missing cards")
 	}
+	// nothing running yet: no polling attribute on the empty strip
+	if strings.Contains(body, `hx-get="/partials/plugin-jobs"`) {
+		t.Fatal("job polling active with no jobs")
+	}
 
-	// install
+	// install returns immediately (the agent runs it as a job)
 	resp = postForm(t, client, base+"/plugins/weaponpaints/install", nil)
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("install: %d", resp.StatusCode)
+	}
+	if fa.installs != 1 {
+		t.Fatalf("agent installs = %d, want 1 async job", fa.installs)
+	}
+
+	// the page now shows live progress and polls for updates
+	body = getBody(t, client, base+"/plugins")
+	if !strings.Contains(body, "downloading WeaponPaints build-459") {
+		t.Fatalf("install progress missing:\n%s", body[:min(600, len(body))])
+	}
+	if !strings.Contains(body, `hx-get="/partials/plugin-jobs"`) {
+		t.Fatal("job polling not enabled while a job runs")
+	}
+
+	// the polled partial renders on its own
+	body = getBody(t, client, base+"/partials/plugin-jobs")
+	if !strings.Contains(body, "WeaponPaints") {
+		t.Fatalf("jobs partial = %q", body)
+	}
+}
+
+// Whitelist enforcement is a plugin config switch, not a cvar: the panel must
+// read it from and write it to the agent's whitelist endpoints.
+func TestPanelWhitelistToggle(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/access")
+	if !strings.Contains(body, "inactive") {
+		t.Fatalf("access page should report whitelist inactive:\n%s", body[:min(400, len(body))])
+	}
+
+	if resp := postForm(t, client, base+"/access/whitelist/toggle", url.Values{"enabled": {"1"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("toggle: %d", resp.StatusCode)
+	}
+	if !fa.wlEnabled {
+		t.Fatal("agent whitelist not enabled")
+	}
+	body = getBody(t, client, base+"/access")
+	if !strings.Contains(body, "enforced") {
+		t.Fatal("access page should report whitelist enforced")
+	}
+
+	if resp := postForm(t, client, base+"/access/whitelist/toggle", url.Values{"enabled": {"0"}}); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("toggle off: %d", resp.StatusCode)
+	}
+	if fa.wlEnabled {
+		t.Fatal("agent whitelist still enabled")
+	}
+}
+
+// State-changing requests from another site must be rejected, and flash
+// messages containing & or + must survive the redirect intact.
+func TestPanelCSRFAndFlashEscaping(t *testing.T) {
+	client, _, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	req, err := http.NewRequest(http.MethodPost, base+"/do/restart", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site POST accepted: %d", resp.StatusCode)
+	}
+
+	// same-origin POSTs still work
+	req, _ = http.NewRequest(http.MethodPost, base+"/do/restart", strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("same-origin POST rejected: %d", resp.StatusCode)
+	}
+
+	// a flash with & and + must round-trip through the query string
+	rec := httptest.NewRecorder()
+	msg := "a&b+c d=e"
+	redirectFlash(rec, httptest.NewRequest(http.MethodGet, "/", nil), "/plugins", "err", msg)
+	loc := rec.Header().Get("Location")
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("err"); got != msg {
+		t.Fatalf("flash mangled: %q -> %q (location %q)", msg, got, loc)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -17,6 +18,10 @@ type Config struct {
 	// SetupTokenFile is the path of the one-time first-admin token. When the
 	// file exists and no users exist, /setup accepts it.
 	SetupTokenFile string `json:"setup_token_file,omitempty"`
+	// PublicURL is the address users reach the panel on (e.g.
+	// https://panel.example.com). Set it when a reverse proxy fronts the panel
+	// so cross-origin checks and secure cookies behave correctly.
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 // Defaults matching the bootstrap installer.
@@ -56,10 +61,33 @@ func LoadConfig(path string) (Config, error) {
 	if v := os.Getenv("CS2A_PANEL_DB"); v != "" {
 		cfg.DBPath = v
 	}
+	if v := os.Getenv("CS2A_PANEL_PUBLIC_URL"); v != "" {
+		cfg.PublicURL = v
+	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// TrustedOrigins is the list of origins allowed to submit forms to the panel
+// in addition to its own. Only the configured public URL qualifies.
+func (c *Config) TrustedOrigins() []string {
+	if c.PublicURL == "" {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(c.PublicURL))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil
+	}
+	return []string{u.Scheme + "://" + u.Host}
+}
+
+// SecureCookies reports whether session cookies may carry the Secure flag
+// (only when the panel is served over HTTPS, otherwise login would break).
+func (c *Config) SecureCookies() bool {
+	u, err := url.Parse(strings.TrimSpace(c.PublicURL))
+	return err == nil && u.Scheme == "https"
 }
 
 // Validate checks required fields.
