@@ -31,7 +31,7 @@ type GHClient struct {
 // NewGHClient builds a client with sane timeouts.
 func NewGHClient(token string) *GHClient {
 	return &GHClient{
-		HTTP:  &http.Client{Timeout: 20 * time.Second},
+		HTTP:  &http.Client{Timeout: 30 * time.Second, Transport: newTransport()},
 		Token: token,
 	}
 }
@@ -41,77 +41,38 @@ func (g *GHClient) LatestRelease(ctx context.Context, repo string) (*GHRelease, 
 	return g.release(ctx, repo, "latest")
 }
 
-// ReleaseByTag returns a specific release by tag.
-func (g *GHClient) ReleaseByTag(ctx context.Context, repo, tag string) (*GHRelease, error) {
-	return g.release(ctx, repo, "tags/"+tag)
-}
-
 func (g *GHClient) release(ctx context.Context, repo, ref string) (*GHRelease, error) {
 	url := "https://api.github.com/repos/" + repo + "/releases/" + ref
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "cs2a-agent")
+	headers := map[string]string{"Accept": "application/vnd.github+json"}
 	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
-	}
-	resp, err := g.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("github: %w", err)
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		// fallthrough
-	case http.StatusNotFound:
-		return nil, fmt.Errorf("github: release not found for %s", repo)
-	case http.StatusForbidden:
-		return nil, fmt.Errorf("github: rate limited or forbidden (consider GITHUB_TOKEN)")
-	default:
-		return nil, fmt.Errorf("github: unexpected status %d for %s", resp.StatusCode, repo)
+		headers["Authorization"] = "Bearer " + g.Token
 	}
 	var rel GHRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel); err != nil {
-		return nil, fmt.Errorf("github: decode release: %w", err)
+	// The API is retried on transport errors and 5xx/429 like every other
+	// outbound call: a rate-limit blip or a dropped connection should not fail
+	// an install that a second attempt completes.
+	err := httpGet(ctx, g.HTTP, url, headers, func(resp *http.Response) error {
+		rel = GHRelease{}
+		return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&rel)
+	})
+	if err != nil {
+		return nil, ghError(repo, err)
 	}
 	return &rel, nil
 }
 
-// Download streams a release asset to w with a hard size cap.
-func (g *GHClient) Download(ctx context.Context, assetURL string, w io.Writer, maxBytes int64) error {
-	return g.DownloadWith(ctx, nil, assetURL, w, maxBytes)
-}
-
-// DownloadWith streams a release asset using the supplied client, so callers
-// can apply a download-sized timeout instead of the short API one.
-func (g *GHClient) DownloadWith(ctx context.Context, client *http.Client, assetURL string, w io.Writer, maxBytes int64) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, assetURL, nil)
-	if err != nil {
-		return err
+// ghError turns transport and status failures into text an operator can act on.
+func ghError(repo string, err error) error {
+	var se *statusErr
+	if asStatus(err, &se) {
+		switch se.code {
+		case http.StatusNotFound:
+			return fmt.Errorf("github: %s has no published release", repo)
+		case http.StatusForbidden, http.StatusTooManyRequests:
+			// Unauthenticated GitHub API calls share a 60/hour/IP budget, which
+			// a few installs on a busy host can exhaust.
+			return fmt.Errorf("github: rate limited while reading %s — set GITHUB_TOKEN in the agent config to raise the limit, or retry in an hour", repo)
+		}
 	}
-	req.Header.Set("User-Agent", "cs2a-agent")
-	if g.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+g.Token)
-	}
-	if client == nil {
-		client = g.HTTP
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("github: download: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github: download status %d", resp.StatusCode)
-	}
-	n, err := io.Copy(w, io.LimitReader(resp.Body, maxBytes+1))
-	if err != nil {
-		return fmt.Errorf("github: download: %w", err)
-	}
-	if n > maxBytes {
-		return fmt.Errorf("github: asset exceeds %d byte cap", maxBytes)
-	}
-	return nil
+	return fmt.Errorf("github: could not read the latest release of %s: %w", repo, err)
 }
