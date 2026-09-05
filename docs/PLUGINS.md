@@ -17,18 +17,50 @@ CS2 plugins form two layers:
    `addons/counterstrikesharp/configs/core.json` for plugins that touch
    cosmetics/commands outside the official guidelines (WeaponPaints needs it).
 
-Distributions:
+## The catalog
 
-| Plugin | Distribution | cs2a install source |
-|---|---|---|
-| Metamod:Source | tar.gz snapshots at `mms.alliedmods.net/mmsdrop/2.0/` | `mmsource-latest-linux.tar.gz` |
-| CounterStrikeSharp | GitHub releases (`roflmuffin/CounterStrikeSharp`), zip with runtime | release asset matching `with-runtime.*linux*.zip` |
-| cs2-WeaponPaints | GitHub releases (`Nereziel/cs2-WeaponPaints`), zip | release asset matching `weaponpaints*.zip` |
-| mm-cs2whitelist | GitHub releases (`FemboyKZ/mm-cs2whitelist`) | release asset |
+`internal/agent/catalog.go` is the single source of truth. Versions are never
+hardcoded: every entry resolves against the live release list at install time,
+so the panel always offers the current upstream build.
 
-Install = download once into a cache → extract into `game/csgo/` → run
-post-install patchers (gameinfo, core.json) → record installed top-level
-dirs in the agent DB so uninstall removes exactly those paths.
+| Entry | Kind | Source | Asset |
+|---|---|---|---|
+| Metamod:Source | runtime | `mms.alliedmods.net/mmsdrop/2.0/` | `mmsource-latest-linux` pointer |
+| CounterStrikeSharp | runtime | `roflmuffin/CounterStrikeSharp` | `counterstrikesharp-with-runtime-linux-*.zip` |
+| cs2-WeaponPaints | cssharp plugin | `Nereziel/cs2-WeaponPaints` | `WeaponPaints.zip` |
+| mm-cs2whitelist | metamod plugin | `FemboyKZ/mm-cs2whitelist` | `cs2whitelist-*-linux.zip` |
+| CS2-SimpleAdmin | cssharp plugin | `daffyyyy/CS2-SimpleAdmin` | `CS2-SimpleAdmin-*.zip` |
+| MatchZy | cssharp plugin | `shobhit-pathak/MatchZy` | `MatchZy-<ver>.zip` |
+| Retakes | cssharp plugin | `B3none/cs2-retakes` | `RetakesPlugin-<ver>.zip` |
+| Deathmatch | cssharp plugin | `NockyCZ/CS2-Deathmatch` | `Deathmatch.zip` |
+| Custom Votes | cssharp plugin | `imi-tat0r/CS2-CustomVotes` | `CS2-CustomVotes-*.zip` |
+| CS2Fixes | metamod plugin | `Source2ZE/CS2Fixes` | `CS2Fixes-*-steamrt3.tar.gz` |
+
+Two details that are easy to get wrong:
+
+- **Metamod publishes no GitHub release.** `mmsource-latest-linux` is a *pointer
+  file* whose body is the current build's filename
+  (`mmsource-2.0.0-git1411-linux.tar.gz`). Fetching `mmsource-latest-linux.tar.gz`
+  directly 404s as soon as upstream rolls a build, so `URLIsPointer` makes the
+  installer read the pointer and resolve the real artifact against its directory.
+- **Several releases ship near-identical assets.** MatchZy publishes
+  `-with-cssharp-linux` and `-windows` bundles beside the plain zip; cs2-retakes
+  publishes a `-no-map-configs` variant that leaves retakes unplayable without
+  hand-sourced spawns. `AssetReject` removes those, and a pattern that still
+  matches more than one asset is a hard error — the installer refuses to guess
+  rather than silently install a Windows build.
+
+Install = resolve the release → download once into the plugin cache → extract
+into `game/csgo/` at the entry's `Dest` (stripping wrapper directories) → run
+post-install patchers → record the entry's `Owns` paths in the agent DB.
+
+`Owns` is what makes uninstall safe. Most plugins extract into the shared
+`addons/` tree, so removing "the top-level directories the archive created"
+would delete every other plugin with it; `Owns` names the exact paths an entry
+is responsible for, and uninstall removes only those.
+
+Archives are extracted with a hard size cap, path-traversal checks and a
+symlink refusal, since the payload comes from a third-party release.
 
 ## WeaponPaints data model (loadout sync)
 
@@ -59,15 +91,23 @@ Players apply cosmetics in-game with `!wp`; cs2a only pre-sets the defaults.
 
 ## Whitelist
 
-`mm-cs2whitelist` reads `cfg/cs2whitelist/whitelist.txt` (one SteamID per
-line) and is toggled with the `mm_whitelist_enable` cvar. cs2a:
+`mm-cs2whitelist` reads `cfg/cs2whitelist/whitelist.txt` (one SteamID64 per
+line, `//` comments allowed). There is **no enable cvar** — the plugin is
+toggled by `Enable` in `cfg/cs2whitelist/core.cfg`, a KeyValues file, and
+reloaded in-game with `wl_reload`. cs2a:
 
 - normalizes every accepted format (`STEAM_1:y:z`, `[U:1:N]`, raw SteamID64)
   to SteamID64,
-- dedupes + sorts, writes the file atomically with a small header,
-- keeps the enable cvar in the `server.cfg` managed block,
+- dedupes + sorts, writes the file atomically with a `//` header,
+- flips `Enable` in `core.cfg` from the panel's Access page, rewriting only
+  that key so operator settings in the file survive,
+- fires `wl_reload` over RCON after a change, so the server picks the list up
+  without a restart,
 - lets admins whitelist a panel user with one click (uses the SteamID linked
   on their account).
+
+An **enforced but empty** whitelist rejects everyone, so the panel says so next
+to the toggle.
 
 ## Player-facing cosmetics workflow (end to end)
 
@@ -91,5 +131,12 @@ line) and is toggled with the `mm_whitelist_enable` cvar. cs2a:
 - CounterStrikeSharp: <https://github.com/roflmuffin/CounterStrikeSharp>
 - cs2-WeaponPaints: <https://github.com/Nereziel/cs2-WeaponPaints>
 - mm-cs2whitelist: <https://github.com/FemboyKZ/mm-cs2whitelist>
+- CS2-SimpleAdmin: <https://github.com/daffyyyy/CS2-SimpleAdmin>
+- MatchZy: <https://shobhit-pathak.github.io/MatchZy/>
+- cs2-retakes: <https://github.com/B3none/cs2-retakes>
+- CS2-Deathmatch: <https://github.com/NockyCZ/CS2-Deathmatch>
+- CS2-CustomVotes: <https://github.com/imi-tat0r/CS2-CustomVotes>
+- CS2Fixes: <https://github.com/Source2ZE/CS2Fixes>
+- Knife/glove model names: <https://github.com/ByMykel/CSGO-API>
 - Source RCON protocol: <https://developer.valvesoftware.com/wiki/Source_RCON_Protocol>
 - A2S queries: <https://developer.valvesoftware.com/wiki/Server_queries>

@@ -3,95 +3,168 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="color-scheme" content="dark"/>
+<meta name="theme-color" content="#0a0b0e"/>
 <title>cs2a — minimal CS2 server manager</title>
 <meta name="description" content="One command to run a Counter-Strike 2 server with a clean web panel: status, maps, plugins, whitelist and per-player loadouts."/>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230a0b0e'/><g fill='none' stroke='%2348e0b0' stroke-width='2.4' stroke-linecap='round'><circle cx='16' cy='16' r='9.5' stroke-dasharray='9.7 5.2' stroke-dashoffset='-2.6'/><path d='M16 4.5v3M16 24.5v3M4.5 16h3M24.5 16h3' opacity='.5'/></g><circle cx='16' cy='16' r='3' fill='%2348e0b0'/></svg>"/>
 <style>
+	/* Same "ink & signal" palette as the panel: carbon canvas, one mint signal
+	   colour, hairline borders instead of heavy shadows. */
 	:root {
-		--bg: #0b0e14; --surface: #141926; --surface2: #1a2032;
-		--border: rgba(255,255,255,.08); --text: #e8ebf2; --muted: #8b93a7;
-		--accent: #ff7a45; --accent-soft: rgba(255,122,69,.14); --green: #4ade80;
+		--bg: #0a0b0e;
+		--surface: #12151a;
+		--surface-2: #171b22;
+		--line: rgba(255, 255, 255, .07);
+		--line-strong: rgba(255, 255, 255, .13);
+		--text: #e9edf2;
+		--muted: #7d8798;
+		--faint: #57606f;
+		--signal: #48e0b0;
+		--signal-wash: rgba(72, 224, 176, .12);
+		--signal-line: rgba(72, 224, 176, .32);
+		--steel: #8fb0e8;
+		--ease: cubic-bezier(.22, .9, .28, 1);
+		--font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+		--mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	}
 	* { box-sizing: border-box; }
-	html { color-scheme: dark; }
+	html { color-scheme: dark; -webkit-text-size-adjust: 100%; }
 	body {
 		margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
 		background: var(--bg); color: var(--text); line-height: 1.55;
-		font: 15px -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
-		-webkit-font-smoothing: antialiased;
+		font: 15px var(--font); -webkit-font-smoothing: antialiased;
 	}
-	.b1, .b2 { position: fixed; border-radius: 50%; filter: blur(90px); opacity: .3; pointer-events: none; }
-	.b1 { width: 480px; height: 480px; background: var(--accent); top: -140px; right: -100px; }
-	.b2 { width: 420px; height: 420px; background: #3b5bdb; bottom: -160px; left: -120px; }
+	/* two slow-drifting washes, no hard-edged blobs */
+	.wash { position: fixed; border-radius: 50%; filter: blur(110px); pointer-events: none; }
+	.wash.a {
+		width: 560px; height: 560px; top: -220px; right: -140px;
+		background: rgba(72, 224, 176, .16);
+		animation: drift-a 19s ease-in-out infinite alternate;
+	}
+	.wash.b {
+		width: 480px; height: 480px; bottom: -200px; left: -150px;
+		background: rgba(143, 176, 232, .12);
+		animation: drift-b 23s ease-in-out infinite alternate;
+	}
+	@keyframes drift-a { from { transform: none; } to { transform: translate(-70px, 60px) scale(1.1); } }
+	@keyframes drift-b { from { transform: scale(1.05); } to { transform: translate(80px, -50px) scale(.95); } }
+
 	.card {
-		position: relative; width: 620px; max-width: 100%;
-		background: rgba(20,25,38,.88); backdrop-filter: blur(18px);
-		border: 1px solid rgba(255,255,255,.14); border-radius: 18px; padding: 40px 38px;
-		box-shadow: 0 30px 80px rgba(0,0,0,.5);
-		animation: rise .55s cubic-bezier(.2,.9,.3,1) both;
+		position: relative; width: 640px; max-width: 100%;
+		background: color-mix(in srgb, var(--surface) 92%, transparent);
+		backdrop-filter: blur(20px);
+		border: 1px solid var(--line-strong); border-radius: 16px;
+		padding: 38px 36px;
+		box-shadow: 0 18px 44px -22px rgba(0, 0, 0, .85);
+		animation: rise .5s var(--ease) both;
 	}
-	@keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.985); } to { opacity: 1; transform: none; } }
-	.logo {
-		width: 46px; height: 46px; border-radius: 13px; margin-bottom: 16px;
-		background: linear-gradient(135deg, var(--accent), #ffb56b);
-		display: grid; place-items: center; color: #1a1207; font-size: 21px; font-weight: 800;
-		box-shadow: 0 0 26px rgba(255,122,69,.45);
+	/* one hairline of signal along the top edge — the single brand flourish */
+	.card::before {
+		content: ""; position: absolute; inset: 0 auto auto 0; height: 1px; width: 100%;
+		background: linear-gradient(90deg, transparent, var(--signal-line) 30%, var(--signal-line) 70%, transparent);
+		border-radius: 16px 16px 0 0;
 	}
-	h1 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.3px; }
-	.sub { margin: 0 0 26px; color: var(--muted); font-size: 14.5px; }
+	@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+	.lockup { display: flex; align-items: center; gap: 11px; margin-bottom: 18px; }
+	.mark { width: 34px; height: 34px; color: var(--signal); flex: none; }
+	.mark .ring { animation: reticle 22s linear infinite; transform-origin: 16px 16px; }
+	@keyframes reticle { to { transform: rotate(360deg); } }
+	.wordmark { font-size: 21px; font-weight: 640; letter-spacing: -.02em; }
+	.wordmark i { font-style: normal; color: var(--signal); }
+
+	h1 { margin: 0 0 8px; font-size: 25px; font-weight: 640; letter-spacing: -.02em; }
+	.sub { margin: 0 0 26px; color: var(--muted); font-size: 14.5px; max-width: 52ch; }
+
 	.install {
 		display: flex; align-items: center; gap: 10px;
-		background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
-		font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; white-space: nowrap;
+		background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px;
+		padding: 12px 14px; font: 13px var(--mono); overflow-x: auto; white-space: nowrap;
 	}
-	.install .p { color: var(--accent); user-select: none; }
+	.install .p { color: var(--signal); user-select: none; }
 	.copy {
-		margin-left: auto; flex: none; cursor: pointer; border: 1px solid var(--border);
-		background: transparent; color: var(--muted); border-radius: 8px; padding: 5px 10px;
-		font: 600 12px inherit; transition: color .15s, border-color .15s;
+		margin-left: auto; flex: none; cursor: pointer;
+		border: 1px solid var(--line-strong); background: transparent; color: var(--muted);
+		border-radius: 6px; padding: 5px 10px; font: 620 11.5px var(--font);
+		transition: color .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
 	}
-	.copy:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
-	.copy.done { color: var(--green); border-color: rgba(74,222,128,.4); }
-	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 26px; }
-	@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
-	.feat { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; }
-	.feat b { display: block; font-size: 13.5px; }
+	.copy:hover { color: var(--text); border-color: rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .04); }
+	.copy:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 2px; }
+	.copy.done { color: var(--signal); border-color: var(--signal-line); background: var(--signal-wash); }
+
+	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 24px; }
+	@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .card { padding: 30px 22px; } }
+	.feat {
+		background: var(--surface-2); border: 1px solid var(--line);
+		border-radius: 10px; padding: 13px 15px;
+		transition: border-color .18s var(--ease), transform .18s var(--ease);
+	}
+	.feat:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+	.feat b { display: block; font-size: 13px; font-weight: 620; margin-bottom: 2px; }
 	.feat span { color: var(--muted); font-size: 12.5px; }
-	.foot { margin-top: 26px; color: #5b6377; font-size: 12.5px; }
-	.foot a { color: var(--accent); text-decoration: none; }
+
+	.foot { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12.5px; }
+	.foot a { color: var(--steel); text-decoration: none; }
 	.foot a:hover { text-decoration: underline; }
-	code { font: 12.5px ui-monospace, Menlo, monospace; background: var(--surface2); border-radius: 6px; padding: 2px 6px; }
+	code { font: 12px var(--mono); background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; }
+
+	@media (prefers-reduced-motion: reduce) {
+		*, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+	}
 </style>
 </head>
 <body>
-<div class="b1"></div><div class="b2"></div>
+<div class="wash a"></div><div class="wash b"></div>
 <main class="card">
-	<div class="logo">C</div>
-	<h1>cs2a</h1>
-	<p class="sub">A super minimal, lightweight CS2 server manager — web panel + agent for your existing VPS. One command, interactive setup, done.</p>
+	<div class="lockup">
+		<svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true" focusable="false">
+			<circle class="ring" cx="16" cy="16" r="11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="11.3 6" stroke-dashoffset="-3"></circle>
+			<g stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".5">
+				<path d="M16 2.5V6.5"></path><path d="M16 25.5V29.5"></path>
+				<path d="M2.5 16H6.5"></path><path d="M25.5 16H29.5"></path>
+			</g>
+			<circle cx="16" cy="16" r="3.4" fill="currentColor"></circle>
+		</svg>
+		<span class="wordmark">cs<i>2</i>a</span>
+	</div>
+	<h1>A Counter-Strike 2 server manager that stays out of the way</h1>
+	<p class="sub">Web panel for admins and players, plus a small agent on the VPS. One command sets it up, discovers what your machine already has, and installs only what is missing.</p>
 	<div class="install">
 		<span class="p">$</span>
 		<span id="cmd">curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo bash</span>
 		<button class="copy" id="copy" type="button">copy</button>
 	</div>
 	<div class="grid">
-		<div class="feat"><b>Adopts your server</b><span>Detects the existing CS2 install, unit and server.cfg — nothing clobbered.</span></div>
-		<div class="feat"><b>Full cosmetics</b><span>Knives, gloves and agents per player — synced like the official loadout.</span></div>
-		<div class="feat"><b>Plugin catalog</b><span>Metamod, CounterStrikeSharp, WeaponPaints, whitelist — one click each.</span></div>
-		<div class="feat"><b>Stays light</b><span>Two small Go binaries, SQLite, no containers, no bloat.</span></div>
+		<div class="feat"><b>Adopts your server</b><span>Finds the CS2 install, systemd unit, game port and RCON password on its own — nothing clobbered.</span></div>
+		<div class="feat"><b>Plugin catalog</b><span>Metamod, CounterStrikeSharp, WeaponPaints, MatchZy, retakes and more — one click, always the current release.</span></div>
+		<div class="feat"><b>Full cosmetics</b><span>Knives, gloves and agents per player, per side — synced like the official loadout.</span></div>
+		<div class="feat"><b>Stays light</b><span>Two small Go binaries and SQLite. No containers, no runtime, no bloat.</span></div>
 	</div>
 	<p class="foot">
-		Interactive TUI on first run (CasaOS-style). Also available pinned:
+		Reruns are safe: existing credentials are reused, not rotated. Pin a version with
 		<code>sudo CS2A_VERSION=v0.1.0 bash</code> after the pipe. Source on
 		<a href="https://github.com/elvonpiko/cs2a">GitHub</a>.
 	</p>
 </main>
 <script>
-	var b = document.getElementById("copy"), t = document.getElementById("cmd");
-	b.addEventListener("click", function () {
-		navigator.clipboard.writeText(t.textContent).then(function () {
-			b.textContent = "copied"; b.classList.add("done");
-			setTimeout(function () { b.textContent = "copy"; b.classList.remove("done"); }, 1600);
-		});
+	var btn = document.getElementById("copy"), cmd = document.getElementById("cmd");
+	btn.addEventListener("click", function () {
+		var done = function () {
+			btn.textContent = "copied"; btn.classList.add("done");
+			setTimeout(function () { btn.textContent = "copy"; btn.classList.remove("done"); }, 1600);
+		};
+		// clipboard API needs a secure context; fall back to a hidden textarea
+		if (navigator.clipboard && window.isSecureContext) {
+			navigator.clipboard.writeText(cmd.textContent).then(done, function () { btn.textContent = "copy failed"; });
+			return;
+		}
+		var ta = document.createElement("textarea");
+		ta.value = cmd.textContent; ta.setAttribute("readonly", "");
+		ta.style.position = "fixed"; ta.style.opacity = "0";
+		document.body.appendChild(ta); ta.select();
+		try { document.execCommand("copy"); done(); } catch (e) { btn.textContent = "copy failed"; }
+		document.body.removeChild(ta);
 	});
 </script>
 </body>
