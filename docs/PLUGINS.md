@@ -38,11 +38,19 @@ so the panel always offers the current upstream build.
 
 Two details that are easy to get wrong:
 
-- **Metamod publishes no GitHub release.** `mmsource-latest-linux` is a *pointer
-  file* whose body is the current build's filename
+- **Metamod publishes no usable GitHub release.** Its GitHub releases carry only
+  2.0.x prereleases and a 1.12 line with no CS2 binary, so the catalog uses the
+  AlliedModders drop directory instead. `mmsource-latest-linux` there is a
+  *pointer file* whose body is the current build's filename
   (`mmsource-2.0.0-git1411-linux.tar.gz`). Fetching `mmsource-latest-linux.tar.gz`
   directly 404s as soon as upstream rolls a build, so `URLIsPointer` makes the
   installer read the pointer and resolve the real artifact against its directory.
+  `mms.alliedmods.net` is a single point of failure for every plugin (everything
+  depends on Metamod), and it does drop connections mid-response — the panel
+  reported `read pointer: … unexpected EOF`. The fetcher therefore retries,
+  falls back to HTTP/1.1, and then tries `www.metamodsource.net` and
+  `www.sourcemm.net`, which serve the byte-identical tarball. Upstream publishes
+  no checksum file for this directory, so there is nothing to verify against.
 - **Several releases ship near-identical assets.** MatchZy publishes
   `-with-cssharp-linux` and `-windows` bundles beside the plain zip; cs2-retakes
   publishes a `-no-map-configs` variant that leaves retakes unplayable without
@@ -52,12 +60,23 @@ Two details that are easy to get wrong:
 
 Install = resolve the release → download once into the plugin cache → extract
 into `game/csgo/` at the entry's `Dest` (stripping wrapper directories) → run
-post-install patchers → record the entry's `Owns` paths in the agent DB.
+post-install patchers → hand the extracted files to the account the game runs
+as → record the entry's `Owns` paths in the agent DB.
+
+That ownership step matters because the agent runs as root while the game server
+does not: files left root-owned load fine but the plugin cannot write its own
+configs or logs, and the panel's config editor would create root-owned files
+inside a tree the game user has to manage. The owner is taken from the csgo
+directory itself, falling back to the game unit's `User=`.
 
 `Owns` is what makes uninstall safe. Most plugins extract into the shared
 `addons/` tree, so removing "the top-level directories the archive created"
 would delete every other plugin with it; `Owns` names the exact paths an entry
 is responsible for, and uninstall removes only those.
+
+Uninstalling a runtime that other installed plugins need is refused outright:
+removing Metamod used to leave every CSSharp plugin present but silently dead,
+with nothing in the panel explaining why.
 
 Archives are extracted with a hard size cap, path-traversal checks and a
 symlink refusal, since the payload comes from a third-party release.
@@ -92,22 +111,38 @@ Players apply cosmetics in-game with `!wp`; cs2a only pre-sets the defaults.
 ## Whitelist
 
 `mm-cs2whitelist` reads `cfg/cs2whitelist/whitelist.txt` (one SteamID64 per
-line, `//` comments allowed). There is **no enable cvar** — the plugin is
-toggled by `Enable` in `cfg/cs2whitelist/core.cfg`, a KeyValues file, and
-reloaded in-game with `wl_reload`. cs2a:
+line, `//`, `#` and `;` comments allowed). Enforcement has **two** switches that
+must agree:
+
+- `Enable` in `cfg/cs2whitelist/core.cfg` (KeyValues) — read once when Metamod
+  finishes loading plugins, and copied into the cvar below. This is the
+  persistent setting.
+- `mm_whitelist_enable` — the live cvar. Changing only the file leaves the
+  running server on its old value until it restarts.
+
+cs2a therefore writes the file *and* pushes the cvar. It:
 
 - normalizes every accepted format (`STEAM_1:y:z`, `[U:1:N]`, raw SteamID64)
   to SteamID64,
 - dedupes + sorts, writes the file atomically with a `//` header,
 - flips `Enable` in `core.cfg` from the panel's Access page, rewriting only
   that key so operator settings in the file survive,
-- fires `wl_reload` over RCON after a change, so the server picks the list up
-  without a restart,
+- pushes `mm_whitelist_enable 0|1` over RCON so the toggle takes effect at once,
+- runs `mm_whitelist_reload` after a list change, then
+  `mm_whitelist_cache_clear`: the plugin caches its allow/reject decision per
+  player for the current map, so a reload alone would keep rejecting someone
+  who was just added,
 - lets admins whitelist a panel user with one click (uses the SteamID linked
   on their account).
 
-An **enforced but empty** whitelist rejects everyone, so the panel says so next
-to the toggle.
+The command names come from the plugin's own console commands. cs2a used to send
+`wl_reload`, which no released version implements — every "applied live" claim
+was silently discarded by the server.
+
+An **enforced but empty** whitelist rejects everyone, including the admin who
+flipped the switch. The panel therefore leaves the toggle disabled until the list
+has at least one entry, and the agent refuses the change even if the request
+arrives some other way.
 
 ## Player-facing cosmetics workflow (end to end)
 

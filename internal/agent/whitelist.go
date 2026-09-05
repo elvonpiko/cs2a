@@ -16,10 +16,12 @@ import (
 //	cfg/cs2whitelist/whitelist.txt  — one normalized SteamID64 per line
 //	cfg/cs2whitelist/core.cfg       — KeyValues config with the on/off switch
 //
-// The plugin has no console variable to toggle enforcement (an earlier version
-// of cs2a assumed an "mm_whitelist_enable" cvar, which does not exist): the
-// switch lives in core.cfg's "Enable" key and is read on plugin load and each
-// map change. cs2a is the single writer of both files.
+// The switch lives in core.cfg's "Enable" key, which the plugin reads once in
+// AllPluginsLoaded and copies into its `mm_whitelist_enable` cvar. core.cfg is
+// therefore the persistent setting, and the cvar is the live one: writing the
+// file alone leaves the running server on its old value until the plugin is
+// loaded again (a server restart), which is why SetEnabled is paired with an
+// RCON push of the cvar. cs2a is the single writer of both files.
 type Whitelist struct {
 	cfg Config
 }
@@ -39,6 +41,10 @@ func (w *Whitelist) CorePath() string {
 
 // Apply normalizes, dedupes and writes the whitelist file atomically.
 // Enabling/disabling enforcement is exposed separately via SetEnabled.
+//
+// Clearing the list while enforcement is on is refused for the same reason
+// SetEnabled refuses to enforce an empty list: the plugin would reject every
+// connection, and the operator's only way back would be editing files over SSH.
 func (w *Whitelist) Apply(entries []string) ([]string, error) {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(entries))
@@ -54,6 +60,16 @@ func (w *Whitelist) Apply(entries []string) ([]string, error) {
 		out = append(out, id)
 	}
 	sort.Strings(out)
+
+	if len(out) == 0 {
+		on, err := w.Enabled()
+		if err != nil {
+			return nil, err
+		}
+		if on {
+			return nil, fmt.Errorf("whitelist: refusing to clear the list while enforcement is on — that would reject every player, including you; switch enforcement off first")
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString("// cs2a managed whitelist (one SteamID64 per line)\n")
@@ -113,10 +129,27 @@ func (w *Whitelist) Enabled() (bool, error) {
 }
 
 // SetEnabled flips the plugin's "Enable" key in core.cfg, preserving every
-// other setting and comment. The plugin re-reads it on the next map change;
-// callers may also issue its `wl_reload` command over RCON for an instant
-// effect.
+// other setting and comment.
+//
+// core.cfg is only read when the plugin loads, so the file change alone does
+// not affect the running server: callers pair this with the plugin's
+// `mm_whitelist_enable` cvar over RCON (see API.handlePutWhitelistEnabled).
+//
+// Enforcing an empty list is refused. The plugin rejects every connection that
+// is not on the list, so an empty enforced whitelist takes the server offline
+// for everyone — including the operator who flipped the switch, who then has no
+// way back in except editing files over SSH. There is no legitimate use for it:
+// stopping the server is the supported way to close it.
 func (w *Whitelist) SetEnabled(on bool) error {
+	if on {
+		ids, err := w.Read()
+		if err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return fmt.Errorf("whitelist: refusing to enforce an empty whitelist — it would reject every player, including you; add at least one SteamID first")
+		}
+	}
 	val := "0"
 	if on {
 		val = "1"
@@ -141,6 +174,12 @@ func (w *Whitelist) SetEnabled(on bool) error {
 
 // writeWhitelistCoreCFG is the post-install step: it creates core.cfg pointing
 // at the file cs2a manages, without clobbering an operator's existing config.
+//
+// Enforcement starts OFF. Installing the plugin used to write Enable "1" while
+// whitelist.txt did not exist yet, so the moment the server restarted every
+// connection was rejected — the operator had installed a plugin and locked
+// themselves out of their own server in one click. Turning it on is a deliberate
+// action on the Access page, which requires at least one SteamID.
 func writeWhitelistCoreCFG(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil // keep the plugin's or the operator's config
@@ -148,7 +187,7 @@ func writeWhitelistCoreCFG(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return atomicWrite(path, []byte(defaultWhitelistCoreCFG("1")), 0o644)
+	return atomicWrite(path, []byte(defaultWhitelistCoreCFG("0")), 0o644)
 }
 
 // defaultWhitelistCoreCFG is a minimal core.cfg in the plugin's KeyValues
@@ -171,4 +210,53 @@ func defaultWhitelistCoreCFG(enable string) string {
 	}
 }
 `
+}
+
+// quietExec is the part of *Server the whitelist needs: a fire-and-forget RCON
+// command. Kept as an interface so the whitelist tests do not need a live
+// server, and so a nil controller is simply a no-op.
+type quietExec interface {
+	ExecQuiet(command string) error
+}
+
+// PushLive mirrors the enforcement switch onto the running server.
+//
+// The plugin reads core.cfg once, when Metamod finishes loading plugins, and
+// copies "Enable" into its mm_whitelist_enable cvar. Flipping the file alone
+// therefore had no effect until the next server restart: the panel reported
+// success while the server kept enforcing the old value. Setting the cvar is
+// what makes the toggle immediate.
+//
+// Best-effort by design: RCON may be down, and the command simply does not
+// exist when the plugin is not installed.
+func (w *Whitelist) PushLive(exec quietExec, on bool) {
+	if exec == nil {
+		return
+	}
+	val := "0"
+	if on {
+		val = "1"
+	}
+	_ = exec.ExecQuiet("mm_whitelist_enable " + val)
+	// Turning enforcement on mid-map must not be undone by decisions the plugin
+	// already cached, and turning it off should let a rejected player back in
+	// without waiting for a map change.
+	_ = exec.ExecQuiet("mm_whitelist_cache_clear")
+}
+
+// ReloadLive asks the plugin to re-read the whitelist file and forget the
+// decisions it cached for this map.
+//
+// The plugin keeps the parsed list in memory (reloaded on map change) plus a
+// per-map cache of who it already allowed or rejected. Adding a player and only
+// reloading the file still left them in the rejection cache until the map
+// changed, so an operator who fixed a typo saw no effect. The command names come
+// from the plugin's own console commands (mm_whitelist_*); the "wl_reload" cs2a
+// used to send never existed in any released version.
+func (w *Whitelist) ReloadLive(exec quietExec) {
+	if exec == nil {
+		return
+	}
+	_ = exec.ExecQuiet("mm_whitelist_reload")
+	_ = exec.ExecQuiet("mm_whitelist_cache_clear")
 }
