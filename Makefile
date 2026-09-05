@@ -9,8 +9,12 @@ LDFLAGS := -s -w -X cs2a/internal/version.Version=$(VERSION)
 all: test build
 
 ## generate: render templ templates into Go code
+# GOOS/GOARCH/CGO are cleared on purpose: templ is a host tool that has to run on
+# this machine. `go tool` builds it for whatever target the environment names, so
+# a cross-compiling build (GOARCH=arm64) produced an arm64 templ and died with
+# "exec format error" before compiling anything.
 generate:
-	go tool templ generate
+	GOOS= GOARCH= GOARM= CGO_ENABLED= go tool templ generate
 
 ## test: run all Go tests
 test:
