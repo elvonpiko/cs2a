@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,11 +20,14 @@ type Server struct {
 	store *Store
 	agent *AgentClient
 	log   *slog.Logger
+	// throttle slows password guessing on /login (the panel is the only
+	// internet-facing component).
+	throttle *loginThrottle
 }
 
 // NewServer wires the panel.
 func NewServer(cfg Config, store *Store, agent *AgentClient, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: store, agent: agent, log: log}
+	return &Server{cfg: cfg, store: store, agent: agent, log: log, throttle: newLoginThrottle()}
 }
 
 // ctxKey is the context key type for request-scoped values.
@@ -63,6 +67,9 @@ func (s *Server) Handler() http.Handler {
 	// pages
 	mux.HandleFunc("GET /{$}", s.auth(s.handleServerPage))
 	mux.HandleFunc("GET /partials/status-card", s.auth(s.handleStatusCardPartial))
+	// The journal can contain connection details, so it stays admin-only — the
+	// same rule the page-level log card follows.
+	mux.HandleFunc("GET /partials/server-logs", s.admin(s.handleServerLogsPartial))
 	mux.HandleFunc("GET /plugins", s.admin(s.handlePluginsPage))
 	mux.HandleFunc("GET /partials/plugin-jobs", s.admin(s.handlePluginJobsPartial))
 	mux.HandleFunc("GET /plugins/{id}/config", s.admin(s.handlePluginConfigPage))
@@ -84,6 +91,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /do/start", s.admin(s.handleServerAction("start")))
 	mux.HandleFunc("POST /do/stop", s.admin(s.handleServerAction("stop")))
 	mux.HandleFunc("POST /do/restart", s.admin(s.handleServerAction("restart")))
+	mux.HandleFunc("POST /do/rcon-repair", s.admin(s.handleRCONRepair))
 	mux.HandleFunc("POST /do/map", s.auth(s.handleMapChange))
 
 	return s.logMiddleware(s.csrfMiddleware(mux))
@@ -217,10 +225,29 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderLogin(w http.ResponseWriter, errMsg string) {
+	s.renderLoginBody(w, errMsg)
+}
+
+// renderLoginBody writes the login page. It is separate from renderLogin so a
+// throttled response can set its status code before the body is written.
+func (s *Server) renderLoginBody(w http.ResponseWriter, errMsg string) {
 	comp := web.Bare("Sign in", web.Login(errMsg))
 	if err := comp.Render(context.Background(), w); err != nil {
 		s.log.Error("render login", "err", err)
 	}
+}
+
+// waitLabel renders a retry delay the way a person would say it.
+func waitLabel(d time.Duration) string {
+	if d < time.Minute {
+		secs := int(d.Seconds()) + 1
+		return strconv.Itoa(secs) + " seconds"
+	}
+	mins := int(d.Minutes()) + 1
+	if mins == 1 {
+		return "a minute"
+	}
+	return strconv.Itoa(mins) + " minutes"
 }
 
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -230,12 +257,24 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, "Enter a username and password.")
 		return
 	}
+	addr := clientAddr(r)
+	// Guessing is throttled before the hash is even computed, so a locked-out
+	// attacker cannot use bcrypt's cost as a CPU amplifier either.
+	if wait := s.throttle.retryAfter(addr, username); wait > 0 {
+		s.store.Audit(username, "auth.login.throttled", addr)
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		w.WriteHeader(http.StatusTooManyRequests)
+		s.renderLoginBody(w, "Too many failed sign-in attempts. Try again in "+waitLabel(wait)+".")
+		return
+	}
 	u, err := s.store.GetUserByUsername(username)
 	if err != nil || !CheckPassword(u.PasswordHash, password) {
-		s.store.Audit(username, "auth.login.failed", "")
+		s.throttle.failed(addr, username)
+		s.store.Audit(username, "auth.login.failed", addr)
 		s.renderLogin(w, "Wrong username or password.")
 		return
 	}
+	s.throttle.succeeded(addr, username)
 	tok, err := NewToken()
 	if err != nil {
 		s.renderLogin(w, "Could not create session, try again.")
@@ -245,6 +284,9 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		s.renderLogin(w, "Could not create session, try again.")
 		return
 	}
+	// A successful login is the natural moment to drop stale rows: the sessions
+	// table is append-only otherwise, and expiry alone never deleted anything.
+	_ = s.store.DeleteExpiredSessions()
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookie,
 		Value:    tok,
@@ -262,7 +304,20 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
 		_ = s.store.DeleteSession(HashToken(cookie.Value))
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
+	// The clearing cookie must carry the same attributes as the one it replaces,
+	// or a browser that stored a Secure cookie keeps it: Set-Cookie only matches
+	// on name/domain/path, but a Secure cookie is not overwritten by a
+	// non-Secure one on an HTTPS origin, which left the (now deleted) session
+	// token in the browser.
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   s.cfg.SecureCookies(),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
@@ -298,7 +353,9 @@ func (s *Server) handleSetupPost(w http.ResponseWriter, r *http.Request) {
 	}
 	wantTok, ok := s.cfg.SetupToken()
 	gotTok := strings.TrimSpace(r.FormValue("token"))
-	if !ok || gotTok != wantTok {
+	// Constant-time: the setup token is the one secret that grants admin on a
+	// brand-new install, and it is compared against attacker-supplied input.
+	if !ok || !ConstantTimeEqual(gotTok, wantTok) {
 		s.renderSetup(w, "Invalid setup token — check /etc/cs2a/panel-setup-token on the server.")
 		return
 	}

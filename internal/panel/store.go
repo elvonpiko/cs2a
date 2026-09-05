@@ -63,6 +63,11 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Expired sessions are rejected on every request, but nothing ever removed
+	// the rows: a panel left running for months accumulated one row per login
+	// forever, in a database the operator has no UI to prune. Sweeping at open
+	// (and after each login) keeps the table bounded without a goroutine.
+	_ = s.DeleteExpiredSessions()
 	return s, nil
 }
 
