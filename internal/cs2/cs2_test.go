@@ -13,6 +13,7 @@ func TestNormalizeSteamID(t *testing.T) {
 		wantErr bool
 	}{
 		{"[U:1:1234567]", "76561197961500295", false},
+		{"U:1:1234567", "76561197961500295", false}, // pasted without brackets
 		{"STEAM_1:0:11101", "76561197960287930", false},
 		{"STEAM_0:1:11101", "76561197960287931", false},
 		{"76561198029989895", "76561198029989895", false},
@@ -24,6 +25,20 @@ func TestNormalizeSteamID(t *testing.T) {
 		{"https://steamcommunity.com/profiles/76561198029989895", "", true},
 		{"STEAM_1:2:11101", "", true},
 		{"[U:1:0]", "", true},
+		// A clan id is not a player: converting it produced a SteamID64 that can
+		// never match anyone, so the whitelist entry silently did nothing.
+		{"[C:1:1234567]", "", true},
+		// A group/gameserver SteamID64 is out of the individual account range.
+		{"103582791429521408", "", true},
+		{"18446744073709551615", "", true},
+		// A non-public universe maps to a completely different SteamID64.
+		{"STEAM_9:0:11101", "", true},
+		{"[U:9:1234567]", "", true},
+		// A truncated paste must not be treated as valid.
+		{"[U:1:1234567", "", true},
+		{"[U:1:]", "", true},
+		{"STEAM_1:0:", "", true},
+		{"STEAM_0:0:0", "", true},
 	}
 	for _, c := range cases {
 		got, err := NormalizeSteamID(c.in)
