@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,28 +79,65 @@ func (s *Systemd) IsEnabled() (bool, error) {
 
 // UptimeSeconds reports seconds since the unit last became active.
 func (s *Systemd) UptimeSeconds() (float64, bool) {
-	cmd := exec.Command(s.bin, "show", s.serviceName, "--property=ActiveEnterTimestamp", "--value")
+	// --timestamp=unix (systemd 247+) gives an unambiguous "@<epoch>" value.
+	// Older systemd ignores the flag and prints its locale-ish default
+	// ("Sat 2026-09-05 04:40:19 +0330"), which is why the human formats are
+	// still parsed below.
+	cmd := exec.Command(s.bin, "show", s.serviceName, "--timestamp=unix", "--property=ActiveEnterTimestamp", "--value")
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, false
-	}
-	ts := strings.TrimSpace(string(out))
-	if ts == "" {
-		return 0, false
-	}
-	// systemctl prints e.g. 2025-12-30T10:00:00+0000
-	t, err := time.Parse("2006-01-02T15:04:05-0700", ts)
-	if err != nil {
-		t, err = time.Parse(time.RFC3339, ts)
+		cmd = exec.Command(s.bin, "show", s.serviceName, "--property=ActiveEnterTimestamp", "--value")
+		out, err = cmd.Output()
 		if err != nil {
 			return 0, false
 		}
+	}
+	t, ok := parseSystemdTimestamp(strings.TrimSpace(string(out)))
+	if !ok {
+		return 0, false
 	}
 	secs := time.Since(t).Seconds()
 	if secs < 0 {
 		return 0, false
 	}
 	return secs, true
+}
+
+// systemdTimeLayouts covers every ActiveEnterTimestamp shape systemd emits:
+// its default weekday-prefixed form (with a numeric offset or a zone
+// abbreviation), the same without the weekday, and ISO-8601.
+var systemdTimeLayouts = []string{
+	"Mon 2006-01-02 15:04:05 -0700",
+	"Mon 2006-01-02 15:04:05 MST",
+	"2006-01-02 15:04:05 -0700",
+	"2006-01-02 15:04:05 MST",
+	"2006-01-02T15:04:05-0700",
+	time.RFC3339,
+}
+
+// parseSystemdTimestamp parses a systemctl show timestamp value. An empty or
+// zero value ("n/a", "0") means the unit never became active.
+func parseSystemdTimestamp(ts string) (time.Time, bool) {
+	if ts == "" || ts == "n/a" || ts == "0" || ts == "@0" {
+		return time.Time{}, false
+	}
+	if epoch, ok := strings.CutPrefix(ts, "@"); ok {
+		// unix form: "@1788570619" (may carry fractional seconds)
+		if dot := strings.IndexByte(epoch, '.'); dot >= 0 {
+			epoch = epoch[:dot]
+		}
+		secs, err := strconv.ParseInt(epoch, 10, 64)
+		if err != nil || secs <= 0 {
+			return time.Time{}, false
+		}
+		return time.Unix(secs, 0), true
+	}
+	for _, layout := range systemdTimeLayouts {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // JournalTail returns the last n lines of the unit's journal.
