@@ -1,11 +1,18 @@
-# Publishes the cs2a install path to GitHub Pages on every release tag:
-#   https://elvonpiko.github.io/cs2a/            -> landing page
-#   https://elvonpiko.github.io/cs2a/install.sh  -> curl | sudo bash target
+# Publishes the cs2a install path to GitHub Pages:
+#   https://elvonpiko.github.io/cs2a/             -> landing page
+#   https://elvonpiko.github.io/cs2a/install.sh   -> curl | sudo bash target
 #   https://elvonpiko.github.io/cs2a/bootstrap.sh -> the installer itself
+#
+# REQUIRES Settings > Pages > Source = "GitHub Actions". With the default
+# "Deploy from a branch" the legacy Jekyll builder owns the site instead, this
+# workflow's configure-pages step fails with "Get Pages site failed", and the
+# root install.sh URL above 404s because the branch build serves the repo tree
+# (scripts/install.sh) rather than the assembled public/ directory.
 name: pages
 
 on:
   push:
+    branches: ["main"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -33,8 +40,6 @@ jobs:
           cp site/index.html public/
           cp scripts/install.sh public/
           cp scripts/bootstrap.sh public/
-          # serve shell scripts with a plain text content type (harmless, but tidy)
-          printf 'install.sh application/octet-stream\nbootstrap.sh application/octet-stream\n' > public/.htaccess || true
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
