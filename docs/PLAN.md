@@ -7,6 +7,9 @@
    installs, server password, whitelist, player loadouts.
 3. **Safe by default**: agent loopback-only with token auth, firewall limited
    to game + panel ports, secrets on disk are 0600 and never committed.
+4. **Adoptable**: an install onto a machine that already runs CS2 must leave that
+   server working. The installer reads the existing unit rather than replacing
+   it, and never creates a service account the running server does not use.
 
 ## Non-goals (MVP)
 
@@ -37,6 +40,10 @@ browser ──▶ cs2a-panel (templ SSR + htmx, :8080)
   loopback only and refuses non-loopback binds unless `CS2A_AGENT_EXPOSE=1`.
 - Both speak one tiny authenticated JSON API, so the panel can be re-skinned
   or replaced without touching game integration.
+- The agent runs as root, the game does not. Everything the agent writes into the
+  game tree — extracted plugins, plugin configs, whitelist files — is handed to
+  the account the game runs as, or the server loses the ability to write its own
+  configs.
 
 ## Key decisions
 
@@ -50,6 +57,11 @@ browser ──▶ cs2a-panel (templ SSR + htmx, :8080)
 | systemd for the game process | CS2 is happiest under a supervisor; cs2a gets uptime, restart-on-crash and journal access for free |
 | First-admin via one-time setup token | avoids shipping a default password; the installer prints the token, the panel consumes it on first use |
 | Installer discovers before it asks | RCON password, game port, install dir and unit name are all readable from the machine; asking for them is a worse experience *and* a chance to get them wrong |
+| Adopt an existing server, never rewrite it | most installs land on a machine that already runs CS2; cs2a reads the unit instead of replacing it, adds `-usercon` through a drop-in, and dials the address the unit actually binds |
+| Failed logins are throttled in memory | the panel is the only internet-facing piece and authenticates with a password; counting failures per address and per username needs no store, no goroutine and no dependency |
+| A partial protocol answer is an error *with* data | a `status` reply cut off at 4096 bytes and an unreassembled A2S split both used to read as success with fewer players; cs2a now returns what it parsed **and** says it is incomplete |
+| Upstream behaviour is verified against upstream source | the whitelist plugin's "reload" command and WeaponPaints' table names were both wrong in the first implementation; every plugin integration is now checked against the released source or artifact, not documentation |
+| A failed side effect never fails a successful save | a loadout that reached the panel database but not WeaponPaints' is reported as a warning, so players stop retrying something only an admin can fix |
 
 ## Milestones
 
@@ -61,9 +73,15 @@ browser ──▶ cs2a-panel (templ SSR + htmx, :8080)
 - [x] M6 — end-to-end audit: async install jobs, RCON fire-and-forget for
   `changelevel`, per-entry archive layouts, discovery-first installer, CSRF +
   secure cookies behind a proxy, panel redesign
-- [ ] M7 — journal viewer (server console tail) in the panel
-- [ ] M8 — workshop maps + map rotation editor
-- [ ] M9 — hardening: non-root agent, audit log UI, rate-limited login
+- [x] M7 — journal viewer (server console tail) in the panel
+- [x] M8 — protocol & integration hardening after the first real VPS deploy:
+  RCON diagnosis (`-usercon`/`rcon_password`/bind address/wrong password), truncated
+  RCON and split A2S replies surfaced as partial data, plugin pointer downloads
+  retried across mirrors with an HTTP/1.1 fallback, dependency errors flattened,
+  ownership preserved on every write into the game tree, session GC + server-side
+  logout, live whitelist commands that the plugin actually implements
+- [ ] M9 — workshop maps + map rotation editor
+- [ ] M10 — hardening: non-root agent, audit log UI
 
 ## Testing strategy
 
@@ -78,11 +96,22 @@ browser ──▶ cs2a-panel (templ SSR + htmx, :8080)
 - Go tests for the install plan (`internal/bootstrap`): unit rendering, firewall
   rules, Caddy timeouts, and config JSON that survives secrets containing
   quotes and backslashes.
+- Every fixed bug gets a test that fails on the old behaviour: adopting a server
+  that binds a public address, a unit without `-usercon`, a lifecycle action that
+  reports success for a unit that died, a whitelist switch that would lock the
+  operator out, a cosmetic catalog that decodes to empty defaults.
+- Protocol tests assert raw wire bytes, not the client's own assumptions. Several
+  fakes were rewritten after they turned out to encode a shape no shipping CS2
+  build emits (a `status` row with a SteamID column, an A2S player entry carrying
+  one, RCON chunks that made the terminator unobservable); the replacements use
+  verbatim server dumps.
 
 ## Known gaps
 
-- Both services run as root (M9).
+- Both services run as root (M10).
 - One host per install; no multi-server management.
-- Login is not rate-limited (M9).
 - Plugin config editing is raw JSON, with no schema validation beyond
   "is it parseable".
+- The audit trail is written but only readable with `sqlite3` (M10).
+- Plugin catalog versions are resolved at install time from GitHub releases;
+  there is no notification when an installed plugin has a newer release.

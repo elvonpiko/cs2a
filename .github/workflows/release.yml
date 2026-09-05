@@ -1,6 +1,8 @@
 # Builds and publishes a GitHub Release with the prebuilt linux binaries:
-#   dist/cs2a-agent, dist/cs2a-panel, packaged as cs2a-linux-amd64.tar.gz
-# Triggered on v* tags. bootstrap.sh downloads exactly that asset name.
+#   dist/cs2a-agent, dist/cs2a-panel, packaged per architecture as
+#   cs2a-linux-amd64.tar.gz and cs2a-linux-arm64.tar.gz.
+# Triggered on v* tags. bootstrap.sh picks the asset from `uname -m` and
+# verifies the matching .sha256, so both files must exist for both arches.
 name: release
 
 on:
@@ -24,16 +26,19 @@ jobs:
 
       # templ is a tool directive in go.mod, so `make build` runs the exact
       # version this repo pins — nothing to install, nothing to drift.
-      - name: Build linux/amd64
-        run: CGO_ENABLED=0 VERSION="${GITHUB_REF_NAME}" make build
-
-      # Both files stay in the workspace root and the checksum records a bare
-      # filename, so `sha256sum -c cs2a-linux-amd64.tar.gz.sha256` works in
-      # whatever directory the user downloaded the two assets into.
-      - name: Package
+      # Cross-compiling is free here: CGO is off and sqlite is modernc's pure-Go
+      # driver, so the arm64 build needs no toolchain of its own.
+      - name: Build and package
         run: |
-          tar -czf cs2a-linux-amd64.tar.gz -C dist cs2a-agent cs2a-panel
-          sha256sum cs2a-linux-amd64.tar.gz > cs2a-linux-amd64.tar.gz.sha256
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" VERSION="${GITHUB_REF_NAME}" make build
+            tar -czf "cs2a-linux-$arch.tar.gz" -C dist cs2a-agent cs2a-panel
+            # a bare filename in the checksum keeps `sha256sum -c` working in
+            # whatever directory the user downloaded the two assets into
+            sha256sum "cs2a-linux-$arch.tar.gz" > "cs2a-linux-$arch.tar.gz.sha256"
+            rm -rf dist
+          done
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -41,4 +46,6 @@ jobs:
           files: |
             cs2a-linux-amd64.tar.gz
             cs2a-linux-amd64.tar.gz.sha256
+            cs2a-linux-arm64.tar.gz
+            cs2a-linux-arm64.tar.gz.sha256
           generate_release_notes: true
