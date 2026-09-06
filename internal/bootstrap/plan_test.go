@@ -45,6 +45,8 @@ func TestSystemdUnitShape(t *testing.T) {
 		"-ip 0.0.0.0",
 		"-port 27015",
 		"-maxplayers 12",
+		"+map ${CS2A_MAP}",
+		"EnvironmentFile=/opt/cs2a/etc/cs2a-map",
 		"+sv_setsteamaccount GSLT123",
 		"Restart=on-failure",
 	} {
@@ -77,6 +79,14 @@ func TestAgentAndPanelUnits(t *testing.T) {
 	env := PanelEnv("admin", "s3cret")
 	if !strings.Contains(env, "CS2A_ADMIN_USER=admin") || !strings.Contains(env, "CS2A_ADMIN_PASSWORD=s3cret") {
 		t.Errorf("panel env broken: %q", env)
+	}
+	// the launch map comes from the env file, not the unit
+	mapEnv := MapEnv("de_cache")
+	if mapEnv != "CS2A_MAP=de_cache\n" {
+		t.Errorf("map env broken: %q", mapEnv)
+	}
+	if MapEnv("") != "CS2A_MAP=de_dust2\n" {
+		t.Error("empty map must default to de_dust2")
 	}
 }
 

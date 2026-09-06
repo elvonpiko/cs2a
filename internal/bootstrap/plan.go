@@ -157,13 +157,15 @@ func ValidateCS2Dir(dir string) error {
 
 // SystemdUnit renders the cs2-server unit for the game. -usercon is what makes
 // RCON reachable at all; without it the panel can read A2S status but cannot
-// change maps or run commands.
+// change maps or run commands. The map itself comes from the cs2a-map
+// EnvironmentFile (see MapEnv), which the agent rewrites on every panel map
+// change so a restart replays the chosen map.
 func SystemdUnit(p Plan, rconPassword, gslt string) string {
 	maxPlayers := p.MaxPlayers
 	if maxPlayers <= 0 {
 		maxPlayers = 12
 	}
-	execStart := fmt.Sprintf("%s/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port %d -maxplayers %d +map de_dust2 +exec server.cfg",
+	execStart := fmt.Sprintf("%s/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port %d -maxplayers %d +map ${CS2A_MAP} +exec server.cfg",
 		p.CS2Dir, p.GamePort, maxPlayers)
 	if gslt != "" {
 		execStart += " +sv_setsteamaccount " + gslt
@@ -172,19 +174,24 @@ func SystemdUnit(p Plan, rconPassword, gslt string) string {
 Description=CS2 dedicated server (managed by cs2a)
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
 User=%s
 Group=%s
 WorkingDirectory=%s/game
+# CS2A_MAP comes from the EnvironmentFile the agent keeps updated, so the
+# next start replays the map the operator picked instead of de_dust2.
+EnvironmentFile=%s/etc/cs2a-map
 ExecStart=%s
 Restart=on-failure
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-`, p.AgentUser, p.AgentUser, p.CS2Dir, execStart)
+`, p.AgentUser, p.AgentUser, p.CS2Dir, p.InstallRoot, execStart)
 }
 
 // AgentUnit renders the cs2a-agent service unit.
@@ -230,6 +237,16 @@ WantedBy=multi-user.target
 // PanelEnv renders the panel EnvironmentFile content (0600, contains secret).
 func PanelEnv(adminUser, adminPass string) string {
 	return "CS2A_ADMIN_USER=" + adminUser + "\nCS2A_ADMIN_PASSWORD=" + adminPass + "\n"
+}
+
+// MapEnv renders the game unit's EnvironmentFile content: the map the next
+// server start launches. The agent rewrites it on every panel map change;
+// without it a restart fell back to the unit's hardcoded de_dust2.
+func MapEnv(mapName string) string {
+	if mapName == "" {
+		mapName = "de_dust2"
+	}
+	return "CS2A_MAP=" + mapName + "\n"
 }
 
 // FirewallCommands returns the ufw commands for the chosen ports. The panel
@@ -293,6 +310,7 @@ func AgentConfig(p Plan, agentToken, rconPassword, wpDSN string) (string, error)
 		"a2s_addr":      addr,
 		"db_path":       filepath.Join(p.InstallRoot, "var", "agent.db"),
 		"plugin_cache":  filepath.Join(p.InstallRoot, "cache", "plugins"),
+		"map_env_file":  filepath.Join(p.InstallRoot, "etc", "cs2a-map"),
 	}
 	if wpDSN != "" {
 		cfg["wp_dsn"] = wpDSN

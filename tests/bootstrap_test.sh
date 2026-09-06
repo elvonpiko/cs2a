@@ -60,6 +60,62 @@ checkeq "json_str escapes newline"    "$(json_str $'a\nb')"    '"a\nb"'
 checkeq "json_str keeps DSN untouched" "$(json_str 'u:p@tcp(127.0.0.1:3306)/db')" '"u:p@tcp(127.0.0.1:3306)/db"'
 
 echo
+echo "== steamclient.so discovery =="
+# The first real deploy died here: steamcmd was a symlink in /usr/local/bin,
+# so "dirname $STEAMCMD_BIN/linux64" pointed at /usr/local/bin/linux64 and the
+# install continued with a warning, then the server segfaulted on boot.
+# find_steamclient_lib must resolve the symlink and find the real tree.
+TD=$(mktemp -d)
+mkdir -p "$TD/real-steamcmd/linux64"
+printf 'x' > "$TD/real-steamcmd/linux64/steamclient.so"
+ln -s "$TD/real-steamcmd/steamcmd.sh" "$TD/usr-local-steamcmd"
+GOT=$(find_steamclient_lib "$TD/usr-local-steamcmd" steam /home/steam) || GOT=""
+checkeq "resolves a symlinked steamcmd" "$GOT" "$TD/real-steamcmd/linux64/steamclient.so"
+
+# The tarball layout: steamclient.so sits beside steamcmd.sh (one level up
+# from linux64/). The linux64 copy is removed so this case is exercised on
+# its own, not shadowed by the canonical layout.
+rm "$TD/real-steamcmd/linux64/steamclient.so"
+printf 'x' > "$TD/real-steamcmd/steamclient.so"
+GOT=$(find_steamclient_lib "$TD/real-steamcmd/steamcmd.sh" steam "$TD") || GOT=""
+checkeq "finds a lib beside steamcmd" "$GOT" "$TD/real-steamcmd/steamclient.so"
+
+# A missing library must be a failure, not an empty answer the caller ignores.
+rm -rf "$TD/real-steamcmd" "$TD/usr-local-steamcmd"
+GOT=$(find_steamclient_lib "$TD/nope" steam "$TD") && { echo "FAIL  missing lib returned: $GOT"; FAILED=1; } ||
+  echo "  ok  missing lib fails"
+
+# The CS2 install itself ships a version-matched steamclient.so under
+# game/bin/linuxsteamrt64/ — the most reliable candidate on a rerun, where the
+# tree exists regardless of where steamcmd lives.
+rm -rf "$TD/real-steamcmd" "$TD/usr-local-steamcmd" "$TD/bin"
+GOT=$(find_steamclient_lib "$TD/nope" steam "$TD" "$TD/cs2") && { echo "FAIL  missing lib returned: $GOT"; FAILED=1; } ||
+  echo "  ok  no cs2 tree, no lib"
+mkdir -p "$TD/cs2/game/bin/linuxsteamrt64"
+printf 'x' > "$TD/cs2/game/bin/linuxsteamrt64/steamclient.so"
+GOT=$(find_steamclient_lib "$TD/nope" steam "$TD" "$TD/cs2") || GOT=""
+checkeq "falls back to the game's own steamclient.so" "$GOT" "$TD/cs2/game/bin/linuxsteamrt64/steamclient.so"
+
+# A rerun whose sdk64 link already exists (or a real file was placed there)
+# must not need any of the candidates: an empty steamcmd and no cs2 dir still
+# succeeds when the link is present — the caller checks SDK_DIR itself.
+rm -rf "$TD"
+
+# The install must die (not warn) when no steamclient.so exists anywhere:
+# the game segfaults without it and a warning was ignored on the first deploy.
+check "missing steamclient.so is fatal" grep -q 'die "steamclient.so not found' scripts/bootstrap.sh
+# The game unit caps restarts so a crash loop stops instead of spinning forever.
+check "game unit caps crash restarts" grep -q "StartLimitBurst=5" scripts/bootstrap.sh
+# A rerun upgrades a unit cs2a itself wrote (older ones lack the crash limit).
+check "rerun upgrades cs2a's own game unit" grep -q "upgraded cs2a's" scripts/bootstrap.sh
+# The map the panel last switched to must survive a restart: the unit reads it
+# from an EnvironmentFile the agent updates, instead of hardcoding de_dust2.
+check "unit launches the recorded map" grep -q 'EnvironmentFile=\$CS2A_ROOT/etc/cs2a-map' scripts/bootstrap.sh
+check "unit expands CS2A_MAP on the launch line" grep -q '+map \${CS2A_MAP}' scripts/bootstrap.sh
+check "bootstrap creates the map env file" grep -q 'CS2A_MAP=de_dust2' scripts/bootstrap.sh
+check "agent config points at the map env file" grep -q 'map_env_file' scripts/bootstrap.sh
+
+echo
 echo "== generated agent.json is valid JSON =="
 # This is the regression that made a fresh install unusable: the old heredoc
 # emitted a stray '$' and never closed the object when wp_dsn was set.

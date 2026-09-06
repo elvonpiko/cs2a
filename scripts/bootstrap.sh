@@ -511,6 +511,51 @@ detect_steamcmd() {
   return 1
 }
 
+# find_steamclient_lib locates the steamclient.so the game server needs. The
+# game dlopens ~/.steam/sdk64/steamclient.so by absolute path and segfaults in
+# SteamGameServer_Init when it is missing, so this search must survive every
+# way steamcmd can be installed:
+#   - the Debian package: /usr/lib/games/steamcmd/linux64/steamclient.so
+#   - a tarball beside steamcmd.sh: <dir>/linux64/steamclient.so
+#   - a symlink or wrapper in /usr/local/bin: dirname of $1 is useless; the
+#     binary is resolved with readlink -f first (the first real deploy died
+#     exactly here — dirname /usr/local/bin has no linux64).
+#   - the game user's own Steam directory.
+#   - the CS2 install itself ships a version-matched steamclient.so under
+#     game/bin/linuxsteamrt64/ — the most reliable source on a rerun, where
+#     the tree exists regardless of where steamcmd lives.
+# Usage: find_steamclient_lib <steamcmd-binary> <game-user> <user-home> [cs2-dir]
+find_steamclient_lib() { # find_steamclient_lib <steamcmd_bin> <user> <home> [cs2_dir]
+  local bin=$1 user=$2 home=$3 cs2dir=${4:-} real bin_dir base c
+  if [[ -n $bin ]]; then
+    real=$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")
+  else
+    real=""
+  fi
+  if [[ -n $real ]]; then
+    bin_dir=$(dirname "$real")
+    base=$(dirname "$bin_dir")
+  else
+    bin_dir=""; base=""
+  fi
+  for c in "$bin_dir/linux64/steamclient.so" \
+           "$bin_dir/steamclient.so" \
+           /usr/lib/games/steamcmd/linux64/steamclient.so \
+           /usr/lib/games/steam/steamclient.so \
+           /usr/lib/steam/steamclient.so \
+           /usr/lib/steam/steamcmd/linux64/steamclient.so \
+           "$base/linux64/steamclient.so" \
+           "$home/steamcmd/linux64/steamclient.so" \
+           "$home/.local/share/Steam/linux64/steamclient.so" \
+           "$home/.steam/steam/linux64/steamclient.so" \
+           /opt/steamcmd/linux64/steamclient.so \
+           "$cs2dir/game/bin/linuxsteamrt64/steamclient.so" \
+           "$cs2dir/game/csgo/bin/linuxsteamrt64/steamclient.so"; do
+    [[ -n $c && -f $c ]] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
+
 # reuse_secrets keeps a rerun from rotating credentials the panel already uses.
 reuse_secrets() {
   local v
@@ -876,17 +921,9 @@ if [[ $WITH_CS2 -eq 1 ]]; then
     ok "steamcmd installed"
   fi
 
-  # srcds looks for steamclient.so under ~/.steam/sdk64
-  SDK_DIR=$(getent passwd "$CS2A_STEAM_USER" | cut -d: -f6)/.steam/sdk64
-  STEAM_LIB=$(dirname "$STEAMCMD_BIN")/linux64/steamclient.so
-  [[ -f $STEAM_LIB ]] || STEAM_LIB=/usr/lib/games/steam/steamclient.so
-  if [[ -f $STEAM_LIB ]]; then
-    sudo -u "$CS2A_STEAM_USER" mkdir -p "$SDK_DIR"
-    sudo -u "$CS2A_STEAM_USER" ln -sf "$STEAM_LIB" "$SDK_DIR/steamclient.so"
-    ok "steamclient.so linked into ~$CS2A_STEAM_USER/.steam/sdk64"
-  else
-    warn "steamclient.so not found — the server may refuse to start; check your steamcmd install"
-  fi
+  # The steamclient.so link is created after the CS2 install below, so the
+  # game's own version-matched copy (game/bin/linuxsteamrt64/) is a candidate
+  # on every path — fresh install and rerun alike.
 
   step "CS2 dedicated server (app $CS2A_APP_ID)"
   ensure_dirs "$CS2_DIR"
@@ -927,6 +964,36 @@ else
   step "CS2 dedicated server"
   is_cs2_dir "$CS2_DIR" || die "$CS2_DIR does not look like a CS2 install (missing game/csgo/gameinfo.gi)"
   skip "using the existing install at $CS2_DIR"
+fi
+
+# ----------------------------- steamclient.so -------------------------------
+# srcds dlopens ~/.steam/sdk64/steamclient.so by absolute path and segfaults in
+# SteamGameServer_Init when it is missing — the first real deploy downloaded
+# 40 GB and then crash-looped here because steamcmd was a symlink in
+# /usr/local/bin and the only search path was its dirname. This runs after the
+# game tree exists, so the game's own version-matched copy is a candidate too.
+step "steamclient.so"
+STEAM_USER_HOME=$(getent passwd "$CS2A_STEAM_USER" | cut -d: -f6)
+SDK_DIR="$STEAM_USER_HOME/.steam/sdk64"
+STEAM_LIB=$(find_steamclient_lib "${STEAMCMD_BIN:-}" "$CS2A_STEAM_USER" "$STEAM_USER_HOME" "$CS2_DIR" || true)
+# An already-correct link (or a real file) is as good as one we create.
+if [[ -n $STEAM_LIB ]]; then
+  sudo -u "$CS2A_STEAM_USER" mkdir -p "$SDK_DIR"
+  sudo -u "$CS2A_STEAM_USER" ln -sf "$STEAM_LIB" "$SDK_DIR/steamclient.so"
+  ok "steamclient.so linked into ~$CS2A_STEAM_USER/.steam/sdk64 ($STEAM_LIB)"
+elif [[ -e $SDK_DIR/steamclient.so ]]; then
+  ok "steamclient.so already present in ~$CS2A_STEAM_USER/.steam/sdk64"
+else
+  # Warnings here produced the exact failure this script exists to prevent:
+  # a 40 GB download, then a server that segfaults on boot, restarts forever
+  # and a panel that says "give it a minute". Missing steamclient.so is a
+  # stop-the-install problem, not a footnote.
+  die "steamclient.so not found — the CS2 server cannot start without it.
+    Looked beside steamcmd ($STEAMCMD_BIN), in /usr/lib/games/steamcmd/linux64,
+    /usr/lib/steam, ~$CS2A_STEAM_USER/steamcmd, and $CS2_DIR/game/bin/linuxsteamrt64.
+    Fix: link it by hand, then rerun this installer:
+      sudo -u $CS2A_STEAM_USER mkdir -p ~$CS2A_STEAM_USER/.steam/sdk64
+      sudo -u $CS2A_STEAM_USER ln -sf $CS2_DIR/game/bin/linuxsteamrt64/steamclient.so ~$CS2A_STEAM_USER/.steam/sdk64/steamclient.so"
 fi
 
 # ----------------------------- server.cfg -----------------------------------
@@ -1046,7 +1113,8 @@ AGENT_JSON="{
   \"rcon_password\": $(json_str "$RCON_PASS"),
   \"a2s_addr\": \"$CS2A_RCON_HOST:$CS2A_GAME_PORT\",
   \"db_path\": $(json_str "$CS2A_ROOT/var/agent.db"),
-  \"plugin_cache\": $(json_str "$CS2A_ROOT/cache/plugins")"
+  \"plugin_cache\": $(json_str "$CS2A_ROOT/cache/plugins"),
+  \"map_env_file\": $(json_str "$CS2A_ROOT/etc/cs2a-map")"
 [[ -n $WP_DSN ]] && AGENT_JSON+=",
   \"wp_dsn\": $(json_str "$WP_DSN")"
 AGENT_JSON+="
@@ -1244,22 +1312,44 @@ if [[ $GAME_UNIT_EXISTS -eq 0 ]] &&
   GAME_UNIT_EXISTS=1
 fi
 
+# The game unit launches "+map ${CS2A_MAP}" and reads the variable from this
+# EnvironmentFile; the agent rewrites it whenever the panel changes maps, so a
+# restart replays the map the operator chose instead of dragging the server
+# back to de_dust2. Existing content (the current map) is kept on rerun.
+MAP_ENV_FILE="$CS2A_ROOT/etc/cs2a-map"
+if [[ -f $MAP_ENV_FILE ]] && grep -q '^CS2A_MAP=' "$MAP_ENV_FILE"; then
+  ok "keeping current launch map ($(grep '^CS2A_MAP=' "$MAP_ENV_FILE" | cut -d= -f2-))"
+else
+  ensure_dirs "$CS2A_ROOT/etc"
+  printf 'CS2A_MAP=de_dust2\n' > "$MAP_ENV_FILE"
+  ok "wrote $MAP_ENV_FILE (launch map de_dust2)"
+fi
+
 if [[ $MANAGE_GAME_UNIT -eq 1 ]]; then
   # -usercon is what makes RCON reachable at all; without it the panel can
   # read A2S status but cannot change maps or run commands.
-  GAME_EXEC="$CS2_DIR/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port $CS2A_GAME_PORT -maxplayers 12 +map de_dust2 +exec server.cfg"
+  GAME_EXEC="$CS2_DIR/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port $CS2A_GAME_PORT -maxplayers 12 +map \${CS2A_MAP} +exec server.cfg"
   [[ -n $GSLT ]] && GAME_EXEC+=" +sv_setsteamaccount $GSLT"
   cat > "$GAME_UNIT_FILE" <<UNIT
 [Unit]
 Description=CS2 dedicated server (managed by cs2a)
 After=network-online.target
 Wants=network-online.target
+# A binary that dies during map load (missing steamclient.so, bad launch
+# args, busy port) restarts forever without this ceiling: the panel flips
+# between "running" and "offline" every few seconds and never reports why.
+# The limit stops the loop; the journal keeps the reason.
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
 User=$CS2A_STEAM_USER
 Group=$CS2A_STEAM_USER
 WorkingDirectory=$CS2_DIR/game
+# CS2A_MAP comes from the EnvironmentFile the agent keeps updated; the
+# next start replays the map the operator picked instead of de_dust2.
+EnvironmentFile=$CS2A_ROOT/etc/cs2a-map
 ExecStart=$GAME_EXEC
 Restart=on-failure
 RestartSec=5
@@ -1270,7 +1360,44 @@ UNIT
   GAME_UNIT_EXISTS=1
   ok "wrote $CS2A_SERVICE_GAME.service"
 elif [[ $GAME_UNIT_EXISTS -eq 1 ]]; then
-  skip "keeping your existing $CS2A_SERVICE_GAME.service untouched ($GAME_UNIT_FILE)"
+  # A unit cs2a itself wrote in an earlier install is upgraded, not adopted:
+  # older versions shipped no StartLimitBurst, so a crash-looping server
+  # (the missing-steamclient.so case) restarted forever. A foreign unit is
+  # still left byte-for-byte as its author wrote it.
+  if grep -q "managed by cs2a" "$GAME_UNIT_FILE" 2>/dev/null; then
+    GAME_EXEC="$CS2_DIR/game/cs2.sh -dedicated -console -usercon -ip 0.0.0.0 -port $CS2A_GAME_PORT -maxplayers 12 +map \${CS2A_MAP} +exec server.cfg"
+    [[ -n $GSLT ]] && GAME_EXEC+=" +sv_setsteamaccount $GSLT"
+    cat > "$GAME_UNIT_FILE" <<UNIT
+[Unit]
+Description=CS2 dedicated server (managed by cs2a)
+After=network-online.target
+Wants=network-online.target
+# A binary that dies during map load (missing steamclient.so, bad launch
+# args, busy port) restarts forever without this ceiling: the panel flips
+# between "running" and "offline" every few seconds and never reports why.
+# The limit stops the loop; the journal keeps the reason.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=$CS2A_STEAM_USER
+Group=$CS2A_STEAM_USER
+WorkingDirectory=$CS2_DIR/game
+# CS2A_MAP comes from the EnvironmentFile the agent keeps updated; the
+# next start replays the map the operator picked instead of de_dust2.
+EnvironmentFile=$CS2A_ROOT/etc/cs2a-map
+ExecStart=$GAME_EXEC
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    ok "upgraded cs2a's $CS2A_SERVICE_GAME.service (crash-loop limit, persistent launch map)"
+  else
+    skip "keeping your existing $CS2A_SERVICE_GAME.service untouched ($GAME_UNIT_FILE)"
+  fi
   # The merged launch line is the only thing that matters: a commented-out
   # "# -usercon" or one inside an Environment= line satisfied a plain grep over
   # the unit file and hid the exact problem this check exists for.
