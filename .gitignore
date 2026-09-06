@@ -37,3 +37,5 @@ node_modules/
 
 # --- local-only demo (validation, never tracked) ---------------------
 /demo-web/
+# --- validation bundles (local only, never tracked) ---------------------
+/cs2a-validation-*.tar.gz
