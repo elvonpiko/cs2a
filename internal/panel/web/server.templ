@@ -151,16 +151,26 @@ templ StatusCard(v ServerView) {
 	<div class="card" id="status-card" hx-get="/partials/status-card" hx-trigger="every 5s" hx-swap="outerHTML">
 		<h2>Status</h2>
 		<p class="sub">
-			if v.Online {
+			if v.CrashLooping {
+				Crash loop — the game binary dies during startup
+			} else if v.Online {
 				Running — live data via A2S/RCON
 			} else {
 				Offline
 			}
 		</p>
 		<div class="status-hero">
-			<span class={ "status-dot", templ.KV("on", v.Online), templ.KV("pulse", v.Online), templ.KV("off", !v.Online) }></span>
+			<span class={ "status-dot", templ.KV("on", v.Online), templ.KV("pulse", v.Online), templ.KV("off", !v.Online), templ.KV("warn", v.CrashLooping) }></span>
 			<div>
-				if v.Online {
+				if v.CrashLooping {
+					<div class="status-name">Server keeps crashing</div>
+					<div class="faint mono">
+						restarted { fmtInt(v.RestartCount) } times in the last minute
+						if v.ExitCodeLabel != "" {
+							{ " — " }{ v.ExitCodeLabel }
+						}
+					</div>
+				} else if v.Online {
 					<div class="status-name">{ v.Hostname }</div>
 					<div class="faint mono">{ v.ServiceSub }</div>
 				} else {
@@ -222,10 +232,26 @@ templ StatusCard(v ServerView) {
 }
 
 // ServerLogs renders the tail of the game server's journal. It is a separate
-// partial so Refresh swaps just this card instead of reloading the page (which
+// partial so a poll swaps just this card instead of reloading the page (which
 // dropped the flash message explaining why a start had failed).
+//
+// The card tails a running server by itself: a log the operator has to refresh
+// by hand is a log they will be watching when something breaks. Polling is
+// carried by the swap itself — when the server is up the swapped-in card asks
+// for the next poll, and when it is stopped the swapped-in card does not, so
+// the loop stops exactly when there is nothing new to see. Pause is kept in a
+// data attribute the app reads on load, so it survives the swaps.
 templ ServerLogs(v ServerView) {
-	<div class="card" id="server-logs">
+	<div
+		class="card"
+		id="server-logs"
+		if v.Online {
+			hx-get="/partials/server-logs"
+			hx-trigger="every 3s [!window.cs2aLogPaused]"
+			hx-target="#server-logs"
+			hx-swap="outerHTML"
+		}
+	>
 		<h2>Server log</h2>
 		<p class="sub">Last lines from the game server's systemd journal</p>
 		if len(v.LogLines) == 0 {
@@ -234,13 +260,22 @@ templ ServerLogs(v ServerView) {
 				<span>No log output available</span>
 			</div>
 		} else {
-			<pre class="log-tail" aria-label="Server log">
+			<pre class="log-tail" aria-label="Server log" data-logtail="1">
 				for _, l := range v.LogLines {
 					{ l }{ "\n" }
 				}
 			</pre>
 		}
 		<div class="card-foot">
+			// The label is set by app.js from window.cs2aLogPaused, so it
+			// survives every poll swap of this card.
+			<button
+				class="btn ghost sm"
+				type="button"
+				id="log-pause"
+				onclick="cs2aToggleLogPoll(this)"
+				data-resume-label="Resume log"
+			>Pause log</button>
 			<button
 				class="btn ghost sm"
 				type="button"

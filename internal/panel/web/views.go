@@ -20,6 +20,36 @@ func fmtInt(n int) string { return strconv.Itoa(n) }
 // fmtInt64 renders an int64 for templ attribute values.
 func fmtInt64(n int64) string { return strconv.FormatInt(n, 10) }
 
+// DownloadProgress fills the view's download fields from the job's live
+// byte counters. Downloading is only true while the transfer is actually in
+// flight (total known and bytes below it), so the bar appears for the phase
+// that dominates an install and disappears for extraction/config steps.
+func (v *PluginJobView) DownloadProgress(bytes, total int64) {
+	if total <= 0 || bytes < 0 {
+		// Chunked transfer: no total, so no meaningful bar — the step text
+		// alone carries the phase.
+		return
+	}
+	v.Downloading = true
+	v.DownloadPct = int(bytes * 100 / total)
+	if v.DownloadPct > 100 {
+		v.DownloadPct = 100
+	}
+	v.DownloadLabel = fmtBytes(bytes) + " / " + fmtBytes(total)
+}
+
+// fmtBytes renders a byte count the way operators read download sizes.
+func fmtBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
+	case n >= 1<<10:
+		return strconv.FormatFloat(float64(n)/(1<<10), 'f', 1, 64) + " KB"
+	default:
+		return strconv.FormatInt(n, 10) + " B"
+	}
+}
+
 // ariaCurrent renders the aria-current attribute value for nav links.
 func ariaCurrent(active bool) string {
 	if active {
@@ -43,6 +73,22 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// ExitCodeLabel describes how the last run of the game binary ended, in
+// operator terms rather than raw numbers: systemd reports "killed" + 11 for a
+// segfault and "exited" + 1 for a clean non-zero exit.
+func ExitCodeLabel(kind string, code int) string {
+	switch {
+	case kind == "killed" && code == 11:
+		return "killed by signal 11 (segmentation fault)"
+	case kind == "killed" && code > 0:
+		return "killed by signal " + strconv.Itoa(code)
+	case kind == "exited" && code > 0:
+		return "exited with status " + strconv.Itoa(code)
+	default:
+		return ""
+	}
 }
 
 // joinList renders a string slice as "a, b and c" for prose in templates.
@@ -97,6 +143,15 @@ type ServerView struct {
 	// the lifecycle row and the player list; emitting them on a full render
 	// would duplicate ids the page already contains.
 	Polled bool
+	// CrashLooping: the game binary dies during startup and systemd keeps
+	// restarting it. The status card renders a hard problem card instead of
+	// the usual running/offline hero, because "give it a minute" advice is
+	// exactly wrong for this state.
+	CrashLooping bool
+	// RestartCount / ExitCodeLabel describe the loop ("restarted 5 times",
+	// "killed by signal 11").
+	RestartCount  int
+	ExitCodeLabel string
 }
 
 // PlayerRow is one online player line.
@@ -171,6 +226,11 @@ type PluginJobView struct {
 	RequiresRestart bool
 	// Warning is a non-fatal problem reported by a successful install.
 	Warning string
+	// Download progress (percent 0-100, and human-readable byte labels).
+	// Downloading is true only while the artifact transfer is in flight.
+	Downloading   bool
+	DownloadPct   int
+	DownloadLabel string
 }
 
 // AnyRunning reports whether at least one job is still working (drives polling).
@@ -235,11 +295,16 @@ type AgentOption struct {
 
 // AccessView is the admin access page model.
 type AccessView struct {
-	Password        string
-	WhitelistActive bool
-	WhitelistText   string
-	WhitelistCount  int
-	Users           []UserRow
+	Password string
+	// WhitelistInstalled gates the whole whitelist card: the feature is a
+	// plugin, and describing "inactive — requires the CS2 Whitelist plugin"
+	// before it is even installed is noise. The plugins page is where the
+	// operator decides to want it.
+	WhitelistInstalled bool
+	WhitelistActive    bool
+	WhitelistText      string
+	WhitelistCount     int
+	Users              []UserRow
 	// CFGWarning explains a server.cfg cs2a can write to but not fully control
 	// — a second managed block overrides everything shown here, so the page must
 	// say so rather than presenting stale values as the truth.

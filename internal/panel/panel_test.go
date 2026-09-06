@@ -41,6 +41,8 @@ type fakeAgent struct {
 	loadoutSyncOff bool
 	// wlEmpty makes the agent report an empty whitelist.
 	wlEmpty bool
+	// wlPluginInstalled gates the whitelist card on the access page.
+	wlPluginInstalled bool
 }
 
 func (f *fakeAgent) handler() http.Handler {
@@ -159,6 +161,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		f.mu.Lock()
 		enabled := f.wlEnabled
 		empty := f.wlEmpty
+		installed := f.wlPluginInstalled
 		list := append([]string(nil), f.whitelist...)
 		f.mu.Unlock()
 		if len(list) == 0 {
@@ -167,7 +170,10 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if empty {
 			list = nil
 		}
-		body, _ := json.Marshal(map[string]any{"steamids": list, "enabled": enabled})
+		if !installed {
+			list = nil
+		}
+		body, _ := json.Marshal(map[string]any{"steamids": list, "enabled": enabled, "installed": installed})
 		w.Write(body)
 	})
 	mux.HandleFunc("PUT /api/v1/whitelist/enabled", func(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +306,9 @@ func newPanelTestWithJobs(t *testing.T, jobsBody string) (*http.Client, *fakeAge
 		statusBody: fakeStatusRunning,
 		plugins:    `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"]},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime"}]}`,
 		jobsBody:   jobsBody,
+		// Existing tests predate the installed gate and expect the whitelist
+		// card to render; the "plugin missing" case opts out explicitly.
+		wlPluginInstalled: true,
 	}
 	agentTS := httptest.NewServer(fa.handlerWithRef(fa))
 	t.Cleanup(agentTS.Close)
@@ -826,6 +835,42 @@ func TestServerActionReportsFailureWithLog(t *testing.T) {
 	}
 }
 
+// A crash-looping unit must be shown as exactly that — with the restart count
+// and the crash signature — instead of flipping between "Running" and
+// "Offline" every five seconds. This is the state the first real deploy got
+// stuck in: no steamclient.so, SIGSEGV on SteamGameServer_Init, systemd
+// restarting forever, and a panel that promised a loading map.
+func TestServerPageShowsCrashLoop(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	fa.statusBody = `{
+		"service": {"active": false, "enabled": true, "crash_looping": true,
+			"restart_count": 5, "exit_code": 11, "exit_code_kind": "killed"},
+		"note": "the game server keeps crashing on startup"
+	}`
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	for _, path := range []string{"/", "/partials/status-card"} {
+		body := getBody(t, client, base+path)
+		if !strings.Contains(body, "keeps crashing") {
+			t.Fatalf("%s does not name the crash loop:\n%s", path, body[:min(1500, len(body))])
+		}
+		if !strings.Contains(body, "restarted 5 times") {
+			t.Fatalf("%s does not show the restart count", path)
+		}
+		if !strings.Contains(body, "segmentation fault") {
+			t.Fatalf("%s does not explain the SIGSEGV", path)
+		}
+		if strings.Contains(body, "Server is stopped") {
+			t.Fatalf("%s renders the crash loop as a plain stop", path)
+		}
+		if !strings.Contains(body, "steamclient.so") {
+			t.Fatalf("%s does not point at the usual cause", path)
+		}
+	}
+}
+
 // The admin server page shows the journal so a failing server can be diagnosed
 // without SSH; players do not get it.
 func TestServerPageShowsLogsForAdminsOnly(t *testing.T) {
@@ -1181,4 +1226,139 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// A running download renders a byte-accurate bar, not just step text: the
+// transfer is the phase that makes an install look hung.
+func TestPluginJobShowsDownloadBar(t *testing.T) {
+	client, _, base := newPanelTestWithJobs(t, `{"jobs":[{"id":"job9","kind":"install",
+		"target":"cssharp","label":"CounterStrikeSharp","status":"running",
+		"step":"downloading CounterStrikeSharp v100",
+		"download_bytes":27262976,"download_total":52428800}]}`)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	for _, path := range []string{"/plugins", "/partials/plugin-jobs"} {
+		body := getBody(t, client, base+path)
+		if !strings.Contains(body, `role="progressbar"`) {
+			t.Fatalf("%s: no progress bar:\n%s", path, body[:min(1500, len(body))])
+		}
+		if !strings.Contains(body, "26.0 MB / 50.0 MB") {
+			t.Fatalf("%s: byte label missing:\n%s", path, body[:min(1500, len(body))])
+		}
+		if !strings.Contains(body, "52%") {
+			t.Fatalf("%s: percent missing:\n%s", path, body[:min(1500, len(body))])
+		}
+		// The step message stays alongside the bar: the operator sees what is
+		// being downloaded, not just anonymous bytes.
+		if !strings.Contains(body, "downloading CounterStrikeSharp v100 — 26.0 MB / 50.0 MB") {
+			t.Fatalf("%s: step text must stay with the byte label:\n%s", path, body[:min(1500, len(body))])
+		}
+	}
+}
+
+// Jobs without a byte total (resolution, extraction) must not render a bar
+// claiming progress it cannot know.
+func TestPluginJobWithoutTotalHasNoBar(t *testing.T) {
+	client, _, base := newPanelTestWithJobs(t, `{"jobs":[{"id":"job10","kind":"install",
+		"target":"cssharp","label":"CounterStrikeSharp","status":"running",
+		"step":"resolving latest release"}]}`)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/plugins")
+	if strings.Contains(body, `role="progressbar"`) {
+		t.Fatalf("a no-total job must not render a bar:\n%s", body[:min(1500, len(body))])
+	}
+	if !strings.Contains(body, "resolving latest release") {
+		t.Fatal("the step text must still be there")
+	}
+}
+
+// The log card tails a running server by itself, and stops polling a stopped
+// one: the swapped-in card carries the poll attributes only while there is
+// something new to see. Pause is a client-side flag the trigger filter reads.
+func TestServerLogsPartialPollsOnlyWhenRunning(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	fa.statusBody = `{"service":{"active":true,"enabled":true,"uptime_seconds":120}}`
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/partials/server-logs")
+	if !strings.Contains(body, `hx-trigger="every 3s [!window.cs2aLogPaused]"`) {
+		t.Fatalf("a running server's log card must self-poll:\n%s", body[:min(1200, len(body))])
+	}
+	if !strings.Contains(body, "cs2aToggleLogPoll") {
+		t.Fatal("the pause control must be wired")
+	}
+
+	fa.statusBody = `{"service":{"active":false,"enabled":true}}`
+	body = getBody(t, client, base+"/partials/server-logs")
+	if strings.Contains(body, "every 3s") {
+		t.Fatalf("a stopped server's log card must not poll:\n%s", body[:min(1200, len(body))])
+	}
+}
+
+// "Restart the server to load it" must disappear once the agent has seen a
+// boot after the install finished — otherwise the strip nags the operator to
+// repeat a restart they already did, on every page visit.
+func TestPluginJobDropsRestartHintAfterRestart(t *testing.T) {
+	client, _, base := newPanelTestWithJobs(t, `{"jobs":[{"id":"job1","kind":"install",
+		"target":"metamod","label":"Metamod:Source","status":"done","restart_observed":true,
+		"result":{"id":"metamod","version":"2.0.0.1411","requires_restart":true}}]}`)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/plugins")
+	if strings.Contains(body, "restart the server to load it") {
+		t.Fatalf("hint must be gone once the restart happened:\n%s", body[:min(1200, len(body))])
+	}
+	if !strings.Contains(body, "installed 2.0.0.1411") {
+		t.Fatal("the installed version must still be reported")
+	}
+}
+
+// The whitelist is a plugin feature, not a panel feature. Before the operator
+// has installed it, the access page must not render a card describing an
+// "inactive" whitelist — that is noise about a plugin they have not decided
+// to want yet. The placeholder keeps the grid from collapsing the password
+// card to full width.
+func TestWhitelistCardHiddenUntilPluginInstalled(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	fa.mu.Lock()
+	fa.wlPluginInstalled = false
+	fa.mu.Unlock()
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/access")
+	if strings.Contains(body, "Save whitelist") {
+		t.Fatalf("whitelist form must not render before the plugin is installed:\n%s", body[:min(1500, len(body))])
+	}
+	if strings.Contains(body, "inactive") {
+		t.Fatalf("no 'inactive' badge before the plugin exists:\n%s", body[:min(1500, len(body))])
+	}
+	if !strings.Contains(body, "ghost-card") {
+		t.Fatal("the grid needs a placeholder so the password card keeps its size")
+	}
+	if !strings.Contains(body, "/plugins") {
+		t.Fatal("the placeholder should point at the plugins page")
+	}
+
+	// Once installed, the full card is back.
+	fa.mu.Lock()
+	fa.wlPluginInstalled = true
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/access")
+	if !strings.Contains(body, "Save whitelist") {
+		t.Fatal("the card must render once the plugin is installed")
+	}
+	if strings.Contains(body, "ghost-card") {
+		t.Fatal("placeholder must be gone once the plugin is installed")
+	}
 }

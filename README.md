@@ -31,12 +31,12 @@ Uninstall: `sudo bash scripts/uninstall.sh` (add `--purge` for config and data, 
 ## What you get
 
 **Admins**
-- Live server page — status, players, uptime, map preview; start/stop/restart with confirm dialogs
+- Live server page — status, players, uptime, map preview; start/stop/restart with confirm dialogs; the log card tails a running server by itself (pausable, follows your scroll)
 - Lifecycle actions that tell the truth: the agent waits for the unit to settle and brings back the journal tail when a start fails, instead of reporting success the moment `systemctl` exits
 - A diagnosed RCON problem instead of `connection refused`: the panel names the cause (wrong bind address, no `-usercon`, no boot-time password) and offers a one-click repair
 - Map changes that **keep everyone connected** (`changelevel`; only a restart drops players)
 - One-click plugin catalog — Metamod:Source, CounterStrikeSharp, WeaponPaints, MatchZy, retakes, deathmatch, admin tools — always resolving the current upstream release, with a JSON config editor per plugin
-- Installs run as background jobs with live progress, so a 50 MB download cannot time out the request; finished installs update their cards without a reload
+- Installs run as background jobs with a live progress bar (byte-accurate during downloads), so a 50 MB download cannot time out the request; finished installs update their cards without a reload
 - Server password and SteamID whitelist, applied live — no restart. Enforcement stays off until the list has someone on it, because an enforced empty whitelist locks out the operator too
 - Panel accounts (admin/player) with an audit trail; failed sign-ins are throttled, expired sessions are swept, and signing out invalidates the token server-side
 

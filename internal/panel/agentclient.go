@@ -153,6 +153,13 @@ type ServerStatus struct {
 		Sub           string  `json:"sub"`
 		Enabled       bool    `json:"enabled"`
 		UptimeSeconds float64 `json:"uptime_seconds"`
+		// CrashLooping: systemd restarted the unit repeatedly within a short
+		// window — the binary dies during startup and the panel must say so
+		// instead of flipping between "Running" and "Offline" forever.
+		CrashLooping bool   `json:"crash_looping"`
+		RestartCount int    `json:"restart_count"`
+		ExitCode     int    `json:"exit_code"`
+		ExitCodeKind string `json:"exit_code_kind"`
 	} `json:"service"`
 	Info *struct {
 		Name    string `json:"name"`
@@ -402,6 +409,10 @@ func (c *AgentClient) Uninstall(ctx context.Context, id string) error {
 type WhitelistState struct {
 	SteamIDs []string `json:"steamids"`
 	Enabled  bool     `json:"enabled"`
+	// Installed reports whether the CS2 Whitelist plugin is on the server;
+	// without it the whole feature does not exist and the access page hides
+	// the card instead of describing a plugin that is not there.
+	Installed bool `json:"installed"`
 }
 
 // WhitelistState returns the whitelist entries and whether the plugin is
@@ -445,6 +456,13 @@ type Job struct {
 	Result   *InstallResult `json:"result"`
 	Started  time.Time      `json:"started"`
 	Finished time.Time      `json:"finished"`
+	// DownloadBytes/DownloadTotal carry the live download progress while the
+	// job is in its download phase (agent fills them; 0 total = unknown).
+	DownloadBytes int64 `json:"download_bytes"`
+	DownloadTotal int64 `json:"download_total"`
+	// RestartObserved says the game server booted again after a finished
+	// install, so its "restart to load" hint is stale.
+	RestartObserved bool `json:"restart_observed"`
 }
 
 // Running reports whether the job is still in flight.

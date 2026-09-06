@@ -34,7 +34,7 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 			if v.Password != "" {
 				<div class="kv"><span class="k">Current password</span><span class="v mono">{ v.Password }</span></div>
 			}
-			<form method="post" action="/access/password" class="mt14 grow">
+			<form method="post" action="/access/password" class="grow">
 				<label class="field">
 					<span>New password</span>
 					<input type="text" name="password" value={ v.Password } placeholder="empty = no password" autocomplete="off"/>
@@ -48,67 +48,81 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 			</form>
 		</div>
 
-		<div class="card">
-			<h2>Whitelist</h2>
-			<p class="sub">
-				if v.WhitelistActive {
-					<span class="badge orange">enforced</span>
-				} else {
-					<span class="badge grey">inactive</span>
-				}
-				requires the CS2 Whitelist plugin
-			</p>
-			<div class="row between mt8">
-				<span class="faint">
-					{ fmtInt(v.WhitelistCount) } allowed { plural(v.WhitelistCount, "player", "players") }
-				</span>
-				<form method="post" action="/access/whitelist/toggle" class="switch-form mt0">
+		if v.WhitelistInstalled {
+			<div class="card">
+				<h2>Whitelist</h2>
+				<p class="sub">
 					if v.WhitelistActive {
-						<input type="hidden" name="enabled" value="0"/>
-						<button class="switch on" type="submit" role="switch" aria-checked="true">
-							<span class="track" aria-hidden="true"></span>
-							<span>Enforcing</span>
-						</button>
-					} else if v.WhitelistCount == 0 {
-						// The agent refuses to enforce an empty list, because
-						// that rejects every player including the operator. An
-						// enabled switch that always fails is worse than one the
-						// page explains: it stays off until there is an entry.
-						<button class="switch" type="button" disabled aria-disabled="true" title="Add at least one SteamID first">
-							<span class="track" aria-hidden="true"></span>
-							<span>Off</span>
-						</button>
+						<span class="badge orange">enforced</span>
 					} else {
-						<input type="hidden" name="enabled" value="1"/>
-						<button
-							class="switch"
-							type="submit"
-							role="switch"
-							aria-checked="false"
-							data-confirm-danger
-							data-confirm={ whitelistEnableWarning(v.WhitelistCount) }
-						>
-							<span class="track" aria-hidden="true"></span>
-							<span>Off</span>
-						</button>
+						<span class="badge grey">inactive</span>
 					}
+					SteamID allowlist — enforced by the CS2 Whitelist plugin
+				</p>
+				<div class="row between mt8">
+					<span class="faint">
+						{ fmtInt(v.WhitelistCount) } allowed { plural(v.WhitelistCount, "player", "players") }
+					</span>
+					<form method="post" action="/access/whitelist/toggle" class="switch-form mt0">
+						if v.WhitelistActive {
+							<input type="hidden" name="enabled" value="0"/>
+							<button class="switch on" type="submit" role="switch" aria-checked="true">
+								<span class="track" aria-hidden="true"></span>
+								<span>Enforcing</span>
+							</button>
+						} else if v.WhitelistCount == 0 {
+							// The agent refuses to enforce an empty list, because
+							// that rejects every player including the operator. An
+							// enabled switch that always fails is worse than one the
+							// page explains: it stays off until there is an entry.
+							<button class="switch" type="button" disabled aria-disabled="true" title="Add at least one SteamID first">
+								<span class="track" aria-hidden="true"></span>
+								<span>Off</span>
+							</button>
+						} else {
+							<input type="hidden" name="enabled" value="1"/>
+							<button
+								class="switch"
+								type="submit"
+								role="switch"
+								aria-checked="false"
+								data-confirm-danger
+								data-confirm={ whitelistEnableWarning(v.WhitelistCount) }
+							>
+								<span class="track" aria-hidden="true"></span>
+								<span>Off</span>
+							</button>
+						}
+					</form>
+				</div>
+				<hr class="divider"/>
+				<form method="post" action="/access/whitelist" class="grow">
+					<label class="field">
+						<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
+						<textarea name="steamids" rows="9" class="mono tall" spellcheck="false">{ v.WhitelistText }</textarea>
+					</label>
+					<div class="card-foot">
+						<div class="btn-row">
+							<button class="btn primary" type="submit">Save whitelist</button>
+							<a class="btn ghost" href="/users">Pick from panel users</a>
+						</div>
+						<p class="hint">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
+					</div>
 				</form>
 			</div>
-			<hr class="divider"/>
-			<form method="post" action="/access/whitelist" class="grow">
-				<label class="field">
-					<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
-					<textarea name="steamids" rows="9" class="mono tall" spellcheck="false">{ v.WhitelistText }</textarea>
-				</label>
-				<div class="card-foot">
-					<div class="btn-row">
-						<button class="btn primary" type="submit">Save whitelist</button>
-						<a class="btn ghost" href="/users">Pick from panel users</a>
-					</div>
-					<p class="hint">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
-				</div>
-			</form>
-		</div>
+		} else {
+			// The card is intentionally absent until the plugin exists; this
+			// placeholder keeps the grid from collapsing the password card to
+			// full width, which would make the layout jump when the plugin is
+			// installed.
+			<div class="card ghost-card">
+				<h2>Whitelist</h2>
+				<p class="sub">SteamID allowlist — enforced by the CS2 Whitelist plugin</p>
+				<p class="faint">
+					Install the <a href="/plugins">CS2 Whitelist plugin</a> to manage who can join. Nothing is shown here until then.
+				</p>
+			</div>
+		}
 	</div>
 
 	<div class="card section-gap">

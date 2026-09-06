@@ -50,6 +50,19 @@ func (s *Server) serverView(r *http.Request, u *User, polled bool) web.ServerVie
 	}
 	v.Online = st.Service.Active
 	v.ServiceSub = "systemd unit state: " + boolLabel(st.Service.Active)
+	// A crash-looping unit must not be rendered as "Running": is-active flips
+	// on and off every few seconds, which is exactly what the operator cannot
+	// diagnose from the page. The agent already zeroed Active and folded the
+	// journal tail into the status card; this view adds the operator wording.
+	if st.Service.CrashLooping {
+		v.Online = false
+		v.CrashLooping = true
+		v.RestartCount = st.Service.RestartCount
+		v.ExitCodeLabel = exitStatusLabel(st.Service.ExitCodeKind, st.Service.ExitCode)
+		v.Problem = "The game server keeps crashing on startup — systemd has restarted it " +
+			fmt.Sprint(st.Service.RestartCount) + " times in the last minute and then stopped trying."
+		v.ProblemFix = "Read the server log below for the crash reason. A missing steamclient.so under ~/.steam/sdk64 is the usual cause on a fresh install."
+	}
 	if st.Info != nil {
 		v.Hostname = st.Info.Name
 		v.Map = st.Info.Map
@@ -141,6 +154,13 @@ func boolLabel(b bool) string {
 	return "stopped"
 }
 
+// exitStatusLabel describes how the last run of the game binary ended, in
+// operator terms: systemd reports "killed" + 11 for a segfault and "exited" +
+// 1 for a clean non-zero exit.
+func exitStatusLabel(kind string, code int) string {
+	return web.ExitCodeLabel(kind, code)
+}
+
 // --- pages ---------------------------------------------------------------
 
 func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
@@ -164,10 +184,15 @@ func (s *Server) handleStatusCardPartial(w http.ResponseWriter, r *http.Request)
 }
 
 // handleServerLogsPartial re-renders just the log card. It does not build the
-// whole server view: the log panel needs nothing but the journal, and a full
-// build would cost an A2S round trip and an RCON probe per click.
+// whole server view: the log panel needs nothing but the journal and whether
+// the server is up (polling a stopped server's frozen journal is pure noise —
+// the poll loop stops by the swapped-in card not asking for the next tick).
+// One cheap agent call answers both.
 func (s *Server) handleServerLogsPartial(w http.ResponseWriter, r *http.Request) {
 	v := web.ServerView{IsAdmin: true}
+	if st, err := s.agent.Status(r.Context()); err == nil {
+		v.Online = st.Service.Active && !st.Service.CrashLooping
+	}
 	if lines, err := s.agent.Logs(r.Context(), 40); err == nil {
 		v.LogLines = lines
 	}
@@ -362,9 +387,12 @@ func (s *Server) pluginJobViews(r *http.Request) []web.PluginJobView {
 			Message: humanJobError(j.Message),
 			Running: j.Running(),
 		}
+		v.DownloadProgress(j.DownloadBytes, j.DownloadTotal)
 		if j.Result != nil {
 			v.Version = j.Result.Version
-			v.RequiresRestart = j.Result.RequiresRestart
+			// "Restart the server to load it" is only true until the first
+			// restart after the install; the agent says when that happened.
+			v.RequiresRestart = j.Result.RequiresRestart && !j.RestartObserved
 			v.Warning = j.Result.Warning
 		}
 		out = append(out, v)
@@ -498,10 +526,15 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 		v.CFGWarning = warning
 	}
 	// Enforcement lives in the whitelist plugin's own config, not in a cvar.
+	// The card only exists once the plugin does: an "inactive — requires the
+	// CS2 Whitelist plugin" card from day one is noise on a fresh install.
 	if st, err := s.agent.WhitelistState(r.Context()); err == nil {
-		v.WhitelistText = strings.Join(st.SteamIDs, "\n")
-		v.WhitelistActive = st.Enabled
-		v.WhitelistCount = len(st.SteamIDs)
+		v.WhitelistInstalled = st.Installed
+		if st.Installed {
+			v.WhitelistText = strings.Join(st.SteamIDs, "\n")
+			v.WhitelistActive = st.Enabled
+			v.WhitelistCount = len(st.SteamIDs)
+		}
 	}
 	if users, err := s.store.ListUsers(); err == nil {
 		for _, uu := range users {

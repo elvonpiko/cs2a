@@ -183,4 +183,64 @@
 		}
 		cs2aToast("Everything set back to default — press Save loadout to apply.", "ok");
 	});
+
+	// --- server log live tail ------------------------------------------------
+	// The log card polls while the server is up. Three things must not fight
+	// the operator: scrolling up to read history must not be yanked back down
+	// on every poll, returning to the bottom must resume following the tail,
+	// and a brand-new page load must start at the newest lines, not the top of
+	// the buffer. Follow intent lives in a global because the poll swaps the
+	// <pre> wholesale — a data attribute on it dies with the swap.
+	window.cs2aLogPaused = false;
+	window.cs2aLogFollow = true;
+
+	window.cs2aToggleLogPoll = function (btn) {
+		window.cs2aLogPaused = !window.cs2aLogPaused;
+		btn.textContent = window.cs2aLogPaused
+			? (btn.dataset.resumeLabel || "Resume")
+			: "Pause log";
+		if (!window.cs2aLogPaused) {
+			// Resuming immediately snaps to the newest lines instead of waiting
+			// for the next poll tick.
+			pinLogTail();
+		}
+	};
+
+	function pinLogTail() {
+		var tail = document.querySelector('[data-logtail]');
+		if (!tail) return;
+		watchLogScroll(tail);
+		tail.scrollTop = tail.scrollHeight;
+	}
+
+	function watchLogScroll(tail) {
+		if (tail.dataset.cs2aWatched) return;
+		tail.dataset.cs2aWatched = "1";
+		tail.addEventListener("scroll", function () {
+			var atBottom =
+				tail.scrollHeight - tail.scrollTop - tail.clientHeight < 24;
+			window.cs2aLogFollow = atBottom;
+		});
+	}
+
+	// The very first render (full page load) never fires htmx:afterSwap, so the
+	// <pre> would sit at the top of the buffer showing the oldest lines until
+	// the first poll tick landed.
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", pinLogTail);
+	} else {
+		pinLogTail();
+	}
+
+	document.body.addEventListener("htmx:afterSwap", function (e) {
+		if (!e.detail || !e.detail.target) return;
+		if (e.detail.target.id !== "server-logs") return;
+		var tail = e.detail.target.querySelector('[data-logtail]');
+		if (!tail) return;
+		watchLogScroll(tail);
+		if (window.cs2aLogPaused) return;
+		// Follow only when the operator is at (or near) the bottom; a fresh
+		// element starts pinned there, so nothing is lost on first visit.
+		if (window.cs2aLogFollow) tail.scrollTop = tail.scrollHeight;
+	});
 })();

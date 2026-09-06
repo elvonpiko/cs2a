@@ -90,7 +90,7 @@ templ PluginJobs(jobs []PluginJobView) {
 		aria-live="polite"
 		if AnyRunning(jobs) {
 			hx-get="/partials/plugin-jobs"
-			hx-trigger="every 2s"
+			hx-trigger="every 1s"
 			hx-swap="outerHTML"
 		}
 	>
@@ -100,6 +100,7 @@ templ PluginJobs(jobs []PluginJobView) {
 					<div
 						class={ "job-row",
 							templ.KV("running", j.Running),
+							templ.KV("dl", j.Downloading),
 							templ.KV("failed", j.Status == "failed") }
 					>
 						if j.Running {
@@ -113,7 +114,17 @@ templ PluginJobs(jobs []PluginJobView) {
 						}
 						<span class="name">{ j.Name }</span>
 						if j.Running {
-							<span class="step">{ j.Step }</span>
+							if j.Downloading {
+								// A real bar for the phase that dominates an
+								// install: the artifact download. The step text
+								// alone made a 50 MB transfer look like a hang.
+								<span class="bar" role="progressbar" aria-label={ "Downloading " + j.Name } aria-valuemin="0" aria-valuemax="100" aria-valuenow={ fmtInt(j.DownloadPct) }>
+									<span class="bar-fill" style={ "width: " + fmtInt(j.DownloadPct) + "%" }></span>
+								</span>
+								<span class="step">{ j.Step } — { j.DownloadLabel } ({ fmtInt(j.DownloadPct) }%)</span>
+							} else {
+								<span class="step">{ j.Step }</span>
+							}
 						} else if j.Status == "failed" {
 							<span class="step">{ j.Message }</span>
 						} else if j.Warning != "" {

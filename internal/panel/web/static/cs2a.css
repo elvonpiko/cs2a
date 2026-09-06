@@ -203,6 +203,12 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 
 .section-gap { margin-top: 22px; }
 
+/* A placeholder for a feature that is absent on this server (the whitelist
+   before its plugin is installed): keeps the grid symmetric without
+   pretending to be a working card. */
+.ghost-card { border-style: dashed; box-shadow: none; }
+.ghost-card a { color: var(--signal); }
+
 /* --- cards ---------------------------------------------------------------- */
 
 .card {
@@ -216,6 +222,10 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 }
 .card > * { flex: none; }
 .card .grow { flex: 1 1 auto; min-height: 0; }
+/* A form that grows must also lay its own children out as a column, or the
+   card-foot (save button + hint) sits right under the field instead of at
+   the card's bottom edge like every other card. */
+.card form.grow { display: flex; flex-direction: column; }
 .card-foot { margin-top: auto; padding-top: 14px; }
 .card-foot .hint { margin-top: 0; }
 .card h2 { margin: 0 0 3px; font-size: 15px; font-weight: 620; }
@@ -233,6 +243,7 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--whisper); flex: none; }
 .status-dot.on { background: var(--signal); }
 .status-dot.off { background: var(--coral); box-shadow: 0 0 0 4px var(--coral-wash); }
+.status-dot.warn { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-wash); }
 .status-dot.pulse { animation: pulse 2.4s ease-out infinite; }
 @keyframes pulse {
 	0% { box-shadow: 0 0 0 0 rgba(72, 224, 176, 0.5); }
@@ -418,13 +429,28 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .job-row.running { border-color: var(--signal-line); }
 .job-row.failed { border-color: var(--coral-line); align-items: flex-start; }
 .job-row.failed .step { color: var(--coral); }
-/* indeterminate sweep: upstream downloads report no reliable byte total */
-.job-row.running::after {
+/* indeterminate sweep for steps with no byte total (extraction, config
+   patches, chunked downloads): the row keeps a subtle "working" signal.
+   Byte-accurate downloads render .bar instead and the sweep turns off. */
+.job-row.running:not(.dl)::after {
 	content: ""; position: absolute; left: 0; bottom: 0; height: 2px; width: 38%;
 	background: linear-gradient(90deg, transparent, var(--signal), transparent);
 	animation: sweep 1.5s linear infinite;
 }
 @keyframes sweep { from { transform: translateX(-100%); } to { transform: translateX(360%); } }
+/* byte-accurate download bar (the phase that dominates an install) */
+.bar {
+	flex: 0 1 220px; height: 8px; min-width: 90px;
+	background: var(--surface-2);
+	border: 1px solid var(--line);
+	border-radius: 999px; overflow: hidden;
+}
+.bar-fill {
+	display: block; height: 100%;
+	background: var(--signal);
+	border-radius: 999px;
+	transition: width .4s ease;
+}
 .spinner {
 	width: 13px; height: 13px; flex: none; border-radius: 50%;
 	border: 2px solid var(--signal-line); border-top-color: var(--signal);
