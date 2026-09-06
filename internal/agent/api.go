@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"cs2a/internal/rcon"
 )
@@ -209,7 +210,19 @@ func (a *API) handleMapChange(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "map": req.Map})
+	// The map change must outlive the session it was made in: record it so
+	// the next server start launches this map instead of the unit default.
+	// Workshop ids cannot be recorded — the unit's +map argument has no way
+	// to express host_workshop_map, so those changes stay session-only.
+	// A persist failure leaves the running map correct but the restart
+	// regression in place — worth reporting, not worth undoing the change.
+	warn := ""
+	if reWorkshopID.MatchString(req.Map) {
+		warn = "workshop map changes do not survive a restart"
+	} else if perr := WriteMapEnv(a.cfg.MapEnvFile, req.Map); perr != nil {
+		warn = "map change applied, but it will not survive a restart: " + perr.Error()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "map": req.Map, "warning": warn})
 }
 
 func (a *API) handleGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -362,8 +375,8 @@ func (a *API) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := req.Force
-	job, err := a.jobs.Start("install", id, entry.Name, func(ctx context.Context, progress func(string)) (*InstallResult, error) {
-		res, err := a.inst.InstallProgress(ctx, id, force, progress)
+	job, err := a.jobs.Start("install", id, entry.Name, func(ctx context.Context, progress func(Progress)) (*InstallResult, error) {
+		res, err := a.inst.InstallProgress(ctx, id, force, func(p Progress) { progress(p) })
 		if err != nil {
 			return nil, err
 		}
@@ -409,7 +422,9 @@ func (a *API) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleListJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": a.jobs.List()})
+	jobs := a.jobs.List()
+	a.markRestarts(jobs)
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
 func (a *API) handleGetJob(w http.ResponseWriter, r *http.Request) {
@@ -418,7 +433,37 @@ func (a *API) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown job")
 		return
 	}
+	a.markRestarts([]Job{job})
 	writeJSON(w, http.StatusOK, job)
+}
+
+// markRestarts sets RestartObserved on finished installs whose "restart the
+// server to load it" hint is stale: the game unit has entered its current run
+// after the install finished, so the restart already happened. The hint
+// otherwise survives every page load for the whole job retention window and
+// tells the operator to do something they already did.
+func (a *API) markRestarts(jobs []Job) {
+	var boot time.Time
+	haveBoot := false
+	for i := range jobs {
+		j := &jobs[i]
+		if j.Status != JobDone || j.Kind != "install" || j.Result == nil || !j.Result.RequiresRestart {
+			continue
+		}
+		if !haveBoot {
+			// One cheap systemctl read no matter how many jobs there are;
+			// skipped entirely when no job carries the hint.
+			uptime, ok := a.server.sysd.UptimeSeconds()
+			if !ok || uptime <= 0 {
+				return
+			}
+			boot = time.Now().Add(-time.Duration(uptime * float64(time.Second)))
+			haveBoot = true
+		}
+		if boot.After(j.Finished) {
+			j.RestartObserved = true
+		}
+	}
 }
 
 func (a *API) handleGetWhitelist(w http.ResponseWriter, r *http.Request) {
@@ -435,7 +480,15 @@ func (a *API) handleGetWhitelist(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"steamids": ids, "enabled": enabled})
+	// "installed" lets the access page show the whitelist card only when the
+	// feature exists on this server. A card that renders "inactive — requires
+	// the CS2 Whitelist plugin" from day one is just noise about a plugin the
+	// operator has not decided to want yet.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"steamids":  ids,
+		"enabled":   enabled,
+		"installed": a.inst.IsInstalled("mm-cs2whitelist"),
+	})
 }
 
 // handlePutWhitelistEnabled flips enforcement in the plugin's core.cfg and

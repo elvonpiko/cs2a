@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newTestAPI builds an API over fakes and returns a client + the underlying
@@ -240,6 +243,11 @@ func TestAPIWhitelistRoundTrip(t *testing.T) {
 	if out["enabled"] != true {
 		t.Fatalf("enabled not persisted: %v", out)
 	}
+	// installed reports whether the feature exists at all; the access page
+	// hides the whole card until the plugin is on the server.
+	if _, ok := out["installed"].(bool); !ok {
+		t.Fatalf("installed missing from whitelist state: %v", out)
+	}
 }
 
 // Enforcing an empty whitelist rejects every connection, including the
@@ -416,5 +424,190 @@ func TestCvarNameValidation(t *testing.T) {
 		if reCvarName.MatchString(v) {
 			t.Errorf("%q should be invalid", v)
 		}
+	}
+}
+
+// A download in flight must publish its byte counters through the jobs API:
+// the panel's progress bar is driven by download_bytes/download_total, and a
+// stalled bar is indistinguishable from a broken one.
+func TestAPIJobReportsDownloadProgress(t *testing.T) {
+	cfg := testConfig(t)
+	svc := &fakeService{active: true}
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	// A "slow" upstream: it announces a 10-byte body, writes 4, then holds
+	// the connection open until the test has seen the mid-flight counters.
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		io.WriteString(w, "abcd")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
+	}))
+	// Cleanups run LIFO: the handlers must be released (release closed) BEFORE
+	// slow.Close() waits for them to return, or the two deadlock.
+	t.Cleanup(slow.Close)
+	t.Cleanup(func() { close(release) })
+
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	wh := NewWhitelist(cfg)
+	// A direct-URL entry: no GitHub resolution is needed, and the artifact
+	// URL already points at the local slow server, so the default transport
+	// (no rewriting) is exactly right.
+	gh := NewGHClient("")
+	gh.HTTP.Transport = http.DefaultTransport
+	inst := NewInstaller(cfg, store, []CatalogEntry{{
+		ID: "slowthing", Name: "Slow Thing", Kind: KindRuntime,
+		URL: slow.URL + "/slowthing.zip",
+	}}, gh)
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, wh, inst, lo)
+	ts := httptest.NewServer(api.Handler())
+	t.Cleanup(ts.Close)
+
+	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
+	resp, out := doJSON(t, client, "POST", ts.URL, "/api/v1/plugins/slowthing/install", map[string]any{"async": true})
+	if resp.StatusCode != 202 {
+		t.Fatalf("async install: %d %v", resp.StatusCode, out)
+	}
+	id, _ := out["id"].(string)
+
+	// Poll until the job publishes the mid-flight counters.
+	var sawBytes bool
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, out = doJSON(t, client, "GET", ts.URL, "/api/v1/jobs/"+id, nil)
+		if resp.StatusCode != 200 {
+			t.Fatalf("job status: %d", resp.StatusCode)
+		}
+		if b, _ := out["download_bytes"].(float64); b >= 4 {
+			if tt, _ := out["download_total"].(float64); tt == 10 {
+				sawBytes = true
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawBytes {
+		t.Fatalf("job never reported mid-flight download bytes: %v", out)
+	}
+}
+
+// A finished install whose restart hint is stale (the server booted again
+// after the install finished) must say so, or the strip keeps telling the
+// operator to do something they already did.
+func TestAPIJobMarksRestarts(t *testing.T) {
+	cfg := testConfig(t)
+	svc := &fakeService{active: true}
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), nil), lo)
+	// The default retention (10 min) would reap the finished-two-hours-ago
+	// job before the list ever sees it.
+	api.jobs.Retain = 3 * time.Hour
+	ts := httptest.NewServer(api.Handler())
+	t.Cleanup(ts.Close)
+
+	// The fake reports a fixed uptime of 3600s, so the current boot is
+	// "now minus an hour": a job finished two hours ago predates the boot
+	// (restart happened after it — hint stale), one finished now does not.
+	old := Job{
+		ID: "old", Kind: "install", Target: "x", Label: "X", Status: JobDone,
+		Started: time.Now().Add(-2 * time.Hour), Finished: time.Now().Add(-2 * time.Hour),
+		Result: &InstallResult{RequiresRestart: true},
+	}
+	fresh := Job{
+		ID: "new", Kind: "install", Target: "y", Label: "Y", Status: JobDone,
+		Started: time.Now(), Finished: time.Now(),
+		Result: &InstallResult{RequiresRestart: true},
+	}
+	api.jobs.mu.Lock()
+	api.jobs.jobs[old.ID] = &old
+	api.jobs.jobs[fresh.ID] = &fresh
+	api.jobs.mu.Unlock()
+
+	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
+	resp, out := doJSON(t, client, "GET", ts.URL, "/api/v1/jobs", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("jobs: %d", resp.StatusCode)
+	}
+	jobs, _ := out["jobs"].([]any)
+	seen := map[string]bool{}
+	for _, j := range jobs {
+		m := j.(map[string]any)
+		seen[m["id"].(string)] = m["restart_observed"] == true
+	}
+	if !seen["old"] {
+		t.Fatal("an install followed by a server restart must be restart_observed")
+	}
+	if seen["new"] {
+		t.Fatal("an install finished after the current boot must not be restart_observed")
+	}
+}
+
+// Changing the map over the panel must also record it for the next server
+// start: without the env write, a restart dragged the server back to the
+// unit's hardcoded de_dust2 no matter what the operator had picked.
+func TestAPIMapChangePersistsForNextStart(t *testing.T) {
+	cfg := testConfig(t)
+	svc := &fakeService{active: true}
+	fake := startFakeRCON(t, "testpw", nil)
+	cfg.RCONAddr = fake.addr()
+	cfg.RCONPassword = "testpw"
+	cfg.MapEnvFile = filepath.Join(t.TempDir(), "cs2a-map")
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), nil), lo)
+	ts := httptest.NewServer(api.Handler())
+	t.Cleanup(ts.Close)
+
+	mapsDir := filepath.Join(cfg.CSGODir(), "maps")
+	if err := os.MkdirAll(mapsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"de_cache.vpk"} {
+		if err := os.WriteFile(filepath.Join(mapsDir, m), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
+	resp, out := doJSON(t, client, "POST", ts.URL, "/api/v1/map", map[string]any{"map": "de_cache"})
+	if resp.StatusCode != 200 {
+		t.Fatalf("map change: %d %v", resp.StatusCode, out)
+	}
+	if got := readMapEnv(cfg.MapEnvFile); got != "de_cache" {
+		t.Fatalf("env file = %q, want de_cache — restart would lose the map", got)
+	}
+
+	// A workshop id cannot be replayed by +map, so it must not be recorded.
+	resp, out = doJSON(t, client, "POST", ts.URL, "/api/v1/map", map[string]any{"map": "3234455566", "force": true})
+	if resp.StatusCode != 200 {
+		t.Fatalf("workshop map: %d %v", resp.StatusCode, out)
+	}
+	if got := readMapEnv(cfg.MapEnvFile); got != "de_cache" {
+		t.Fatalf("workshop id overwrote the persisted map: %q", got)
+	}
+	if w, _ := out["warning"].(string); w == "" {
+		t.Fatalf("workshop change must warn it will not survive a restart: %v", out)
 	}
 }

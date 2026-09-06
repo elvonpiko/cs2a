@@ -118,14 +118,15 @@ func (in *Installer) Install(ctx context.Context, id string, force bool) (Instal
 }
 
 // InstallProgress is Install with a progress callback for the job runner.
-func (in *Installer) InstallProgress(ctx context.Context, id string, force bool, progress func(string)) (InstallResult, error) {
+// The callback receives both step text and live download byte counts.
+func (in *Installer) InstallProgress(ctx context.Context, id string, force bool, progress func(Progress)) (InstallResult, error) {
 	return in.install(ctx, id, force, progress)
 }
 
-func (in *Installer) install(ctx context.Context, id string, force bool, progress func(string)) (InstallResult, error) {
+func (in *Installer) install(ctx context.Context, id string, force bool, progress func(Progress)) (InstallResult, error) {
 	step := func(format string, args ...any) {
 		if progress != nil {
-			progress(fmt.Sprintf(format, args...))
+			progress(Progress{Step: fmt.Sprintf(format, args...)})
 		}
 	}
 	var res InstallResult
@@ -174,7 +175,13 @@ func (in *Installer) install(ctx context.Context, id string, force bool, progres
 	}
 	step("downloading %s %s", entry.Name, version)
 	tmpPath := filepath.Join(in.cfg.PluginCache, "cs2a-dl-"+id+"-"+sanitizeFileName(version))
-	if err := in.download(ctx, entry, assetURLs, tmpPath); err != nil {
+	dlStep := fmt.Sprintf("downloading %s %s", entry.Name, version)
+	downloadStep := func(bytes, total int64) {
+		if progress != nil {
+			progress(Progress{Step: dlStep, DownloadBytes: bytes, DownloadTotal: total})
+		}
+	}
+	if err := in.download(ctx, entry, assetURLs, tmpPath, downloadStep); err != nil {
 		return res, err
 	}
 	defer os.Remove(tmpPath)
@@ -310,19 +317,66 @@ func sanitizeFileName(s string) string {
 	return s
 }
 
-// resolveArtifact finds the download URLs for an entry: direct URL, pointer
-// file (AlliedModders), or latest GitHub release asset matching the regex.
-// More than one URL means mirrors of the same artifact, tried in order.
+// resolveArtifact finds the download URLs for an entry: GitHub release (the
+// default), pointer file (AlliedModders drop), or a direct URL. More than one
+// URL means mirrors of the same artifact, tried in order.
 func (in *Installer) resolveArtifact(ctx context.Context, entry CatalogEntry) (name string, urls []string, version string, err error) {
+	// An entry with both a repo and a drop-site pointer (metamod) resolves the
+	// repo first and keeps the drop as fallback mirrors: the two origins serve
+	// byte-identical builds, and whichever one a host can reach works.
+	ghErr := error(nil)
+	if entry.Repo != "" {
+		if name, urls, version, err = in.resolveGitHub(ctx, entry); err == nil {
+			if entry.URL != "" && entry.URLIsPointer {
+				// Pointer resolution is best-effort here: the GitHub answer is
+				// already complete, so a drop site that is unreachable simply
+				// contributes no fallback instead of failing the install.
+				if pname, purls, _, perr := in.resolvePointer(ctx, entry); perr == nil {
+					// The two origins name the artifact identically; when the
+					// drop has already rolled a newer build, its URLs would
+					// install a different file than the version recorded —
+					// only accept the fallback when the names agree.
+					if pname == name {
+						urls = append(urls, purls...)
+					}
+				}
+			}
+			return name, urls, version, nil
+		}
+		ghErr = err
+		// A repo entry with no pointer fallback has nothing else to try.
+		if entry.URL == "" || !entry.URLIsPointer {
+			return "", nil, "", fmt.Errorf("plugins: %s: %w", entry.ID, err)
+		}
+	}
 	if entry.URL != "" {
 		if entry.URLIsPointer {
-			return in.resolvePointer(ctx, entry)
+			name, urls, version, err = in.resolvePointer(ctx, entry)
+			// A pointer entry that also names a repo (metamod again) gets the
+			// GitHub asset appended as a last-resort mirror, so an unreachable
+			// drop site does not take the root dependency down with it.
+			if err == nil && entry.Repo != "" {
+				if gname, gurls, _, gerr := in.resolveGitHub(ctx, entry); gerr == nil && gname == name {
+					urls = append(urls, gurls...)
+				}
+			}
+			if err != nil && ghErr != nil {
+				// Both origins failed: report both, so the operator can tell an
+				// upstream outage from a local network problem.
+				err = fmt.Errorf("plugins: %s: %w", entry.ID, errors.Join(ghErr, err))
+			}
+			return name, urls, version, err
 		}
 		return filepath.Base(entry.URL), pointerCandidates(entry), "latest", nil
 	}
-	rel, err := in.gh.LatestRelease(ctx, entry.Repo)
+	return "", nil, "", fmt.Errorf("plugins: %s has no repo or url", entry.ID)
+}
+
+// resolveGitHub picks the asset from the repo's matching release.
+func (in *Installer) resolveGitHub(ctx context.Context, entry CatalogEntry) (name string, urls []string, version string, err error) {
+	rel, err := in.gh.LatestMatchingRelease(ctx, entry.Repo, entry.TagRegex)
 	if err != nil {
-		return "", nil, "", fmt.Errorf("plugins: %s: %w", entry.ID, err)
+		return "", nil, "", err
 	}
 	re, err := regexp.Compile(entry.AssetRegex)
 	if err != nil {
@@ -511,7 +565,11 @@ func asWarning(err error) (string, bool) {
 	return "", false
 }
 
-func (in *Installer) download(ctx context.Context, entry CatalogEntry, urls []string, dest string) error {
+// download fetches the artifact from the first URL that answers, streaming
+// into dest. onBytes (may be nil) receives the live byte count and the
+// total when the server supplies one, so the panel can draw a real bar
+// instead of a spinner that hides a multi-minute transfer.
+func (in *Installer) download(ctx context.Context, entry CatalogEntry, urls []string, dest string, onBytes func(bytes, total int64)) error {
 	if len(urls) == 0 {
 		return fmt.Errorf("plugins: no download url for %s", entry.ID)
 	}
@@ -533,7 +591,9 @@ func (in *Installer) download(ctx context.Context, entry CatalogEntry, urls []st
 			if err != nil {
 				return err
 			}
-			_, err = copyCapped(f, resp, maxFileBytes)
+			total := resp.ContentLength
+			counting := &countingWriter{f: f, total: total, onBytes: onBytes}
+			_, err = copyCapped(counting, resp, maxFileBytes)
 			if cerr := f.Close(); err == nil {
 				err = cerr
 			}
@@ -545,6 +605,25 @@ func (in *Installer) download(ctx context.Context, entry CatalogEntry, urls []st
 		errs = append(errs, fmt.Errorf("%s: %w", hostOf(url), err))
 	}
 	return fmt.Errorf("plugins: download %s: %w", entry.ID, errors.Join(errs...))
+}
+
+// countingWriter wraps the destination file and reports bytes as they land.
+type countingWriter struct {
+	f       *os.File
+	total   int64
+	n       int64
+	onBytes func(bytes, total int64)
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	// io.Copy calls Write on the outermost writer, so this is where the byte
+	// count is true even when the copy is capped.
+	n, err := c.f.Write(p)
+	c.n += int64(n)
+	if c.onBytes != nil {
+		c.onBytes(c.n, c.total)
+	}
+	return n, err
 }
 
 func (in *Installer) runPostInstall(step string) error {

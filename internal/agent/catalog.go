@@ -29,6 +29,12 @@ type CatalogEntry struct {
 	Repo string `json:"repo,omitempty"`
 	// AssetRegex picks the release asset to install.
 	AssetRegex string `json:"asset_regex,omitempty"`
+	// TagRegex restricts which release in the repo's list is used, when the
+	// latest published release is not the right one. Metamod is the reason this
+	// exists: its CS2 line (2.0.x) ships as prereleases, so "latest" answers
+	// the 1.12 branch, which has no CS2 binary. Matching the tag keeps the
+	// resolution on the right branch without pinning a version.
+	TagRegex string `json:"tag_regex,omitempty"`
 	// AssetReject drops assets that AssetRegex also matches. RE2 has no
 	// negative lookahead, and several projects publish variants next to the
 	// artifact a server actually wants (a Windows build, a website bundle, a
@@ -106,14 +112,20 @@ func DefaultCatalog() []CatalogEntry {
 			Description: "Plugin loader for the Source 2 engine. Required by every other component.",
 			Author:      "AlliedModders",
 			Kind:        KindRuntime,
-			// mmsource-latest-linux is a pointer file containing the current
-			// build's filename (e.g. mmsource-2.0.0-git1411-linux.tar.gz).
-			//
-			// Only the 2.0 branch has a CS2 loader
-			// (addons/metamod/bin/linuxsteamrt64/metamod.2.cs2.so). The GitHub
-			// releases of metamod-source cannot be used instead: every 2.0.x
-			// release is flagged as a prerelease, so /releases/latest answers
-			// with the 1.12 branch, which contains no CS2 binary at all.
+			// Metamod resolves from the AlliedModders GitHub releases, not the
+			// mmsdrop pointer: mms.alliedmods.net and both its mirrors are the
+			// same Cloudflare origin, and a host whose route to that origin
+			// resets TLS got "EOF" from all three mirrors at once — while the
+			// GitHub API (already the source of every other entry) worked
+			// fine. The same 2.0 builds are published as GitHub prereleases
+			// (byte-identical tarball names), and TagRegex keeps the pick on
+			// the 2.0 branch because "latest" answers 1.12, which has no CS2
+			// binary. The drop remains as fallback mirrors: pointer first,
+			// GitHub asset appended, so one origin dying cannot take the root
+			// dependency of the catalog with it.
+			Repo:         "alliedmodders/metamod-source",
+			AssetRegex:   `(?i)^mmsource-2\.\d+\.\d+-git\d+-linux\.tar\.gz$`,
+			TagRegex:     `^2\.`,
 			URL:          "https://mms.alliedmods.net/mmsdrop/2.0/mmsource-latest-linux",
 			URLMirrors:   metamodMirrors,
 			URLIsPointer: true,

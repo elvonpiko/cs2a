@@ -68,6 +68,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The game unit's EnvironmentFile must exist before the unit can start;
+	// systemd fails a unit whose EnvironmentFile is missing. bootstrap creates
+	// it, but the agent re-ensures so a hand-deleted file cannot wedge the
+	// next server start. Best effort: an agent that cannot write it should
+	// still come up to serve status.
+	if cfg.MapEnvFile != "" {
+		if err := agent.EnsureMapEnv(cfg.MapEnvFile); err != nil {
+			logger.Error("map env file", "err", err)
+		}
+	}
+
 	srv := agent.NewServer(cfg, store)
 	wh := agent.NewWhitelist(cfg)
 	gh := agent.NewGHClient(os.Getenv("GITHUB_TOKEN"))

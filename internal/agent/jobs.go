@@ -30,6 +30,19 @@ type Job struct {
 	Result   *InstallResult `json:"result,omitempty"`
 	Started  time.Time      `json:"started"`
 	Finished time.Time      `json:"finished,omitempty"`
+	// DownloadBytes/DownloadTotal are the live progress of the artifact
+	// download, the phase that dominates an install on a slow link. Total
+	// 0 means the size is unknown (chunked transfer) and the panel shows
+	// an indeterminate bar.
+	DownloadBytes int64 `json:"download_bytes,omitempty"`
+	DownloadTotal int64 `json:"download_total,omitempty"`
+	// RestartObserved (filled by the API layer, not the job itself) says the
+	// game server has (re)started since this install finished, so the
+	// "restart the server to load it" hint is stale and must not be shown.
+	RestartObserved bool `json:"restart_observed,omitempty"`
+
+	// lastByteReport throttles byte-counter updates; runtime state only.
+	lastByteReport time.Time
 }
 
 // Elapsed is how long the job ran (or has been running).
@@ -64,12 +77,22 @@ func (e *ErrBusy) Error() string {
 	return fmt.Sprintf("%s is already being %sed", e.Target, e.Kind)
 }
 
+// Progress is one update from a running job: a human-readable step and, while
+// an artifact is downloading, the live byte count.
+type Progress struct {
+	Step string
+	// DownloadBytes/DownloadTotal are set (>0 total) only during the download
+	// step, so the panel can draw a byte-accurate bar.
+	DownloadBytes int64
+	DownloadTotal int64
+}
+
 // Start registers a job for target and runs fn in the background. Only one
 // job per target may run at a time; a second attempt returns *ErrBusy.
 //
 // fn receives a progress callback and a context that outlives the HTTP request
 // that started it.
-func (js *Jobs) Start(kind, target, label string, fn func(ctx context.Context, progress func(string)) (*InstallResult, error)) (*Job, error) {
+func (js *Jobs) Start(kind, target, label string, fn func(ctx context.Context, progress func(Progress)) (*InstallResult, error)) (*Job, error) {
 	js.mu.Lock()
 	js.reapLocked()
 	for _, j := range js.jobs {
@@ -97,7 +120,7 @@ func (js *Jobs) Start(kind, target, label string, fn func(ctx context.Context, p
 		// The job must survive the request that started it, but not forever.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		res, err := fn(ctx, func(step string) { js.setStep(job.ID, step) })
+		res, err := fn(ctx, func(p Progress) { js.report(job.ID, p) })
 		js.mu.Lock()
 		defer js.mu.Unlock()
 		job.Finished = time.Now()
@@ -105,20 +128,44 @@ func (js *Jobs) Start(kind, target, label string, fn func(ctx context.Context, p
 			job.Status = JobFailed
 			job.Message = err.Error()
 			job.Step = ""
+			job.DownloadBytes, job.DownloadTotal = 0, 0
 			return
 		}
 		job.Status = JobDone
 		job.Step = ""
+		job.DownloadBytes, job.DownloadTotal = 0, 0
 		job.Result = res
 	}()
 	return job.snapshot(js), nil
 }
 
-func (js *Jobs) setStep(id, step string) {
+// report records one progress update. Byte counters are throttled to one
+// update per 100ms — a 50 MB download on a fast link copies in bursts that
+// would otherwise lock the registry mutex thousands of times a second, while
+// the panel polls at 1s anyway.
+func (js *Jobs) report(id string, p Progress) {
 	js.mu.Lock()
 	defer js.mu.Unlock()
-	if j, ok := js.jobs[id]; ok && j.Status == JobRunning {
-		j.Step = step
+	j, ok := js.jobs[id]
+	if !ok || j.Status != JobRunning {
+		return
+	}
+	if p.DownloadTotal > 0 {
+		now := time.Now()
+		if !j.lastByteReport.IsZero() && now.Sub(j.lastByteReport) < 100*time.Millisecond {
+			// Keep the freshest byte count anyway so the final update is
+			// never a stale one.
+			j.DownloadBytes, j.DownloadTotal = p.DownloadBytes, p.DownloadTotal
+			return
+		}
+		j.lastByteReport = now
+	}
+	j.Step = p.Step
+	if p.Step == "" || p.DownloadTotal == 0 {
+		j.DownloadBytes, j.DownloadTotal = 0, 0
+	}
+	if p.DownloadTotal > 0 {
+		j.DownloadBytes, j.DownloadTotal = p.DownloadBytes, p.DownloadTotal
 	}
 }
 

@@ -25,7 +25,7 @@ so the panel always offers the current upstream build.
 
 | Entry | Kind | Source | Asset |
 |---|---|---|---|
-| Metamod:Source | runtime | `mms.alliedmods.net/mmsdrop/2.0/` | `mmsource-latest-linux` pointer |
+| Metamod:Source | runtime | `alliedmodders/metamod-source` (GitHub) | `mmsource-2.0.x-*-linux.tar.gz` |
 | CounterStrikeSharp | runtime | `roflmuffin/CounterStrikeSharp` | `counterstrikesharp-with-runtime-linux-*.zip` |
 | cs2-WeaponPaints | cssharp plugin | `Nereziel/cs2-WeaponPaints` | `WeaponPaints.zip` |
 | mm-cs2whitelist | metamod plugin | `FemboyKZ/mm-cs2whitelist` | `cs2whitelist-*-linux.zip` |
@@ -38,19 +38,18 @@ so the panel always offers the current upstream build.
 
 Two details that are easy to get wrong:
 
-- **Metamod publishes no usable GitHub release.** Its GitHub releases carry only
-  2.0.x prereleases and a 1.12 line with no CS2 binary, so the catalog uses the
-  AlliedModders drop directory instead. `mmsource-latest-linux` there is a
-  *pointer file* whose body is the current build's filename
-  (`mmsource-2.0.0-git1411-linux.tar.gz`). Fetching `mmsource-latest-linux.tar.gz`
-  directly 404s as soon as upstream rolls a build, so `URLIsPointer` makes the
-  installer read the pointer and resolve the real artifact against its directory.
-  `mms.alliedmods.net` is a single point of failure for every plugin (everything
-  depends on Metamod), and it does drop connections mid-response — the panel
-  reported `read pointer: … unexpected EOF`. The fetcher therefore retries,
-  falls back to HTTP/1.1, and then tries `www.metamodsource.net` and
-  `www.sourcemm.net`, which serve the byte-identical tarball. Upstream publishes
-  no checksum file for this directory, so there is nothing to verify against.
+- **Metamod's CS2 line is published only as prereleases.** `releases/latest`
+  on `alliedmodders/metamod-source` answers the 1.12 branch, which has no CS2
+  binary, so the catalog entry carries a `TagRegex` (`^2\.`) and the installer
+  picks the newest matching release from the list instead. The same builds are
+  served by the AlliedModders drop directory (`mms.alliedmods.net/mmsdrop/2.0/`)
+  behind a pointer file (`mmsource-latest-linux`, whose body names the current
+  tarball) — kept as fallback mirrors because the drop and GitHub are different
+  origins: the first real deploy hit a host whose route to the drop's
+  Cloudflare origin reset every TLS handshake ("EOF" from all three drop
+  hostnames at once) while GitHub answered fine. Resolution tries GitHub
+  first and appends the drop URLs only when both name the identical artifact,
+  so the recorded version and the installed file can never disagree.
 - **Several releases ship near-identical assets.** MatchZy publishes
   `-with-cssharp-linux` and `-windows` bundles beside the plain zip; cs2-retakes
   publishes a `-no-map-configs` variant that leaves retakes unplayable without

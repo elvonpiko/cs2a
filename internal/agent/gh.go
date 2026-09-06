@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
 	"time"
 )
 
@@ -18,8 +20,53 @@ type GHAsset struct {
 
 // GHRelease is the subset of a GitHub release the installer needs.
 type GHRelease struct {
-	TagName string    `json:"tag_name"`
-	Assets  []GHAsset `json:"assets"`
+	TagName   string    `json:"tag_name"`
+	Published time.Time `json:"published_at"`
+	Assets    []GHAsset `json:"assets"`
+}
+
+// Releases lists the repo's releases, newest first, prereleases included
+// (metamod's CS2 line is published only as prereleases, so the "latest"
+// endpoint would answer the wrong branch).
+func (g *GHClient) Releases(ctx context.Context, repo string) ([]GHRelease, error) {
+	url := "https://api.github.com/repos/" + repo + "/releases?per_page=20"
+	headers := map[string]string{"Accept": "application/vnd.github+json"}
+	if g.Token != "" {
+		headers["Authorization"] = "Bearer " + g.Token
+	}
+	var rels []GHRelease
+	err := httpGet(ctx, g.HTTP, url, headers, func(resp *http.Response) error {
+		return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&rels)
+	})
+	if err != nil {
+		return nil, ghError(repo, err)
+	}
+	return rels, nil
+}
+
+// LatestMatchingRelease returns the newest release whose tag matches tag.
+// With no tag filter it is the latest published release.
+func (g *GHClient) LatestMatchingRelease(ctx context.Context, repo, tagPattern string) (*GHRelease, error) {
+	if tagPattern == "" {
+		return g.LatestRelease(ctx, repo)
+	}
+	rels, err := g.Releases(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	re, err := regexp.Compile(tagPattern)
+	if err != nil {
+		return nil, fmt.Errorf("github: bad tag pattern %q: %w", tagPattern, err)
+	}
+	// The list endpoint returns releases newest-first, but the API does not
+	// document that ordering; sort by publish date to be safe.
+	sort.SliceStable(rels, func(i, j int) bool { return rels[i].Published.After(rels[j].Published) })
+	for i := range rels {
+		if re.MatchString(rels[i].TagName) {
+			return &rels[i], nil
+		}
+	}
+	return nil, fmt.Errorf("github: no release of %s matches %q", repo, tagPattern)
 }
 
 // GHClient fetches release metadata from the GitHub API.

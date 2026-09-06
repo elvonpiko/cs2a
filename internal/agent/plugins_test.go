@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // mmArtifact is the versioned metamod filename the pointer file names.
@@ -49,6 +51,22 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 	mux.HandleFunc("/mmsdrop/2.0/mmsource-latest-linux", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		io.WriteString(w, mmArtifact+"\n")
+	})
+	// The CS2 (2.0) line ships only as prereleases, so /releases/latest
+	// answers the 1.12 branch. The list endpoint is what the installer reads.
+	mux.HandleFunc("/repos/alliedmodders/metamod-source/releases", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]GHRelease{
+			{TagName: "1.12.0.1226", Published: time.Now().Add(-24 * time.Hour), Assets: []GHAsset{
+				{Name: "mmsource-1.12.0-git1226-linux.tar.gz", URL: base + "/assets/mm112.tar.gz"},
+			}},
+			{TagName: "2.0.0.1411", Published: time.Now().Add(-2 * time.Hour), Assets: []GHAsset{
+				{Name: "mmsource-2.0.0-git1411-windows.zip", URL: base + "/assets/mm-win.zip"},
+				{Name: mmArtifact, URL: base + "/mmsdrop/2.0/" + mmArtifact},
+			}},
+			{TagName: "2.0.0.1410", Published: time.Now().Add(-72 * time.Hour), Assets: []GHAsset{
+				{Name: "mmsource-2.0.0-git1410-linux.tar.gz", URL: base + "/assets/mm-old.tar.gz"},
+			}},
+		})
 	})
 	mux.HandleFunc("/mmsdrop/2.0/"+mmArtifact, func(w http.ResponseWriter, r *http.Request) {
 		var buf bytes.Buffer
@@ -223,8 +241,10 @@ func TestInstallerMetamodPostInstallPatchesGameinfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install metamod: %v", err)
 	}
-	// the version comes from the pointer file, not a hardcoded "latest"
-	if res.Version != "2.0.0-git1411" || res.RequiresRestart != true {
+	// The version is the GitHub tag of the matched 2.0 prerelease, not a
+	// hardcoded "latest" and not the 1.12 branch that /releases/latest
+	// would answer.
+	if res.Version != "2.0.0.1411" || res.RequiresRestart != true {
 		t.Fatalf("res = %+v", res)
 	}
 	raw, _ := os.ReadFile(gi)
@@ -572,4 +592,113 @@ func TestResolveArtifactRejectsAmbiguity(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "narrower pattern") {
 		t.Fatalf("unhelpful error: %v", err)
 	}
+}
+
+// The resolution order the first real deploy forced: metamod's GitHub
+// releases are primary (the same 2.0 builds the drop serves, and a host that
+// cannot reach GitHub usually can — and vice versa), with the AlliedModders
+// drop as fallback. The drop pointer may have rolled a newer build than the
+// GitHub release; its URLs are then skipped so the recorded version and the
+// installed file cannot disagree.
+func TestMetamodResolvesGitHubFirstWithDropFallback(t *testing.T) {
+	_, gh := fakeGH(t)
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	in := NewInstaller(cfg, store, DefaultCatalog(), gh)
+
+	entry, _ := Find(DefaultCatalog(), "metamod")
+	name, urls, version, err := in.resolveArtifact(context.Background(), entry)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	// The 2.0 prerelease's asset, not the 1.12 release that /latest answers
+	// and not the older 1410 build that also matches the asset regex.
+	if name != mmArtifact || version != "2.0.0.1411" {
+		t.Fatalf("name=%q version=%q", name, version)
+	}
+	// GitHub first, then the drop mirrors of the same file. The fake server
+	// answers under its own host, so the GitHub asset URL is the local one.
+	if len(urls) != 4 {
+		t.Fatalf("want github + 3 drop mirrors, got %v", urls)
+	}
+	if !strings.HasSuffix(urls[0], "/mmsdrop/2.0/"+mmArtifact) ||
+		strings.Contains(urls[0], "mms.alliedmods.net") {
+		t.Fatalf("first url is not the github asset: %q", urls[0])
+	}
+	for _, u := range urls[1:] {
+		if !strings.Contains(u, "mmsdrop/2.0") {
+			t.Fatalf("fallback url is not a drop mirror: %q", u)
+		}
+	}
+}
+
+// A host that cannot reach GitHub (the drop worked there, GitHub did not) must
+// still install metamod from the drop pointer.
+func TestMetamodFallsBackToDropWhenGitHubIsDown(t *testing.T) {
+	drop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/mmsource-latest-linux"):
+			io.WriteString(w, mmArtifact+"\n")
+		case strings.HasSuffix(r.URL.Path, mmArtifact):
+			w.Write([]byte("tarball"))
+		default:
+			http.Error(w, "nope", http.StatusNotFound)
+		}
+	}))
+	defer drop.Close()
+
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	// ghDownTransport answers api.github.com with a transport error (the
+	// sandbox cannot dial the real one) and rewrites the drop hostnames to
+	// the local server — the shape of a host whose GitHub route is broken
+	// while AlliedModders answers fine.
+	gh := NewGHClient("")
+	gh.HTTP.Transport = ghDownTransport{drop: drop.URL}
+
+	in := NewInstaller(cfg, store, DefaultCatalog(), gh)
+	entry, _ := Find(DefaultCatalog(), "metamod")
+	name, urls, version, err := in.resolveArtifact(context.Background(), entry)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if name != mmArtifact {
+		t.Fatalf("name=%q", name)
+	}
+	// The drop pointer names the same 1411 build the GitHub release carries.
+	if version != "2.0.0-git1411" {
+		t.Fatalf("version=%q, want the pointer-derived 2.0.0-git1411", version)
+	}
+	// Three drop mirrors of the same file; the transport rewrites their hosts
+	// to the local server only at request time, so the list keeps the real
+	// hostnames. The mirror that answered the pointer (the primary) is first.
+	if len(urls) != 3 {
+		t.Fatalf("want the 3 drop mirrors, got %v", urls)
+	}
+	for _, u := range urls {
+		if !strings.Contains(u, "mmsdrop/2.0/"+mmArtifact) {
+			t.Fatalf("non-drop fallback url: %q", u)
+		}
+	}
+}
+
+// ghDownTransport fails every api.github.com request and passes the drop
+// hostnames to the local test server.
+type ghDownTransport struct {
+	drop string
+}
+
+func (tr ghDownTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.Host, "api.github.com") {
+		return nil, errors.New("connection reset")
+	}
+	if strings.Contains(r.URL.Host, "mms.alliedmods.net") ||
+		strings.Contains(r.URL.Host, "metamodsource.net") ||
+		strings.Contains(r.URL.Host, "sourcemm.net") {
+		r.URL.Host = strings.TrimPrefix(tr.drop, "http://")
+		r.URL.Scheme = "http"
+	}
+	return http.DefaultTransport.RoundTrip(r)
 }

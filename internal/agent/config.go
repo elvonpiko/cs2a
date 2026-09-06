@@ -24,6 +24,10 @@ type Config struct {
 	PluginCache  string `json:"plugin_cache"`  // download cache dir
 	WPDsn        string `json:"wp_dsn"`        // optional WeaponPaints MySQL DSN (loadout sync)
 	GitHubToken  string `json:"github_token"`  // optional, raises the GitHub API rate limit
+	// MapEnvFile is the game unit's EnvironmentFile holding CS2A_MAP, the
+	// map the next server start launches. Panel map changes persist there so
+	// a restart does not fall back to the unit's built-in default.
+	MapEnvFile string `json:"map_env_file"`
 
 	// path is where this config was loaded from, so corrections the agent
 	// works out at runtime (e.g. the real RCON address of an adopted server)
@@ -48,6 +52,7 @@ func DefaultConfig() Config {
 		A2SAddr:     "127.0.0.1:27015",
 		DBPath:      DefaultDBPath,
 		PluginCache: DefaultCachePath,
+		MapEnvFile:  DefaultMapEnvPath,
 	}
 }
 
