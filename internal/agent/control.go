@@ -44,6 +44,13 @@ type stateReader interface {
 	ActiveState() (active, sub, result string)
 }
 
+// healthReader is the optional surface that can tell a crash-looping unit from
+// a slow-starting one. Status uses it to refuse saying "Running" about a
+// server systemd has restarted several times in the last minute.
+type healthReader interface {
+	UnitHealth() UnitHealthState
+}
+
 // journalReader is implemented by controllers that can read the unit's log.
 type journalReader interface {
 	JournalTail(n int) ([]string, error)
@@ -58,9 +65,82 @@ var settleWindow = 6 * time.Second
 // settlePoll is the interval between state checks while settling.
 var settlePoll = 300 * time.Millisecond
 
+// crashLoopThresholds define what "crash-looping" means for Control and
+// Status: a unit that systemd has restarted this many times within the window
+// cannot be described as "running" or "starting" to the operator, whatever
+// is-active says at this instant. The values mirror the unit's
+// StartLimitBurst/IntervalSec (5 in 60s) with one restart of slack so the
+// panel reports the loop the moment it is unambiguous.
+const (
+	crashLoopRestarts = 4
+	crashLoopWindow   = time.Minute
+)
+
+// unitHealth reads the richer state when available. Fakes without it get the
+// plain is-active answer.
+func (s *Server) unitHealth() UnitHealthState {
+	if r, ok := s.sysd.(healthReader); ok {
+		return r.UnitHealth()
+	}
+	active, _ := s.sysd.IsActive()
+	if active {
+		return UnitHealthState{ActiveState: "active", SubState: "running"}
+	}
+	return UnitHealthState{}
+}
+
+// crashLooping reports whether the unit is being restarted repeatedly in a
+// short window: the signature of a binary that dies during map load. A
+// missing steamclient.so segfault, a busy port or a bad launch arg all look
+// like this, and none of them ever gets better by waiting.
+//
+// NRestarts is cumulative since the last clean stop, so the window check on
+// the most recent death keeps a healthy server that has collected restarts
+// over weeks from reading as a loop.
+func crashLooping(h UnitHealthState) bool {
+	if h.NRestarts < crashLoopRestarts {
+		return false
+	}
+	if h.SubState != "auto-restart" && h.ActiveState != "failed" {
+		return false
+	}
+	return deathRecent(h)
+}
+
+// deathRecent reports whether the unit's last exit happened inside the
+// crash-loop window (or is unknown, in which case the restart count is the
+// only signal available and is trusted on its own).
+func deathRecent(h UnitHealthState) bool {
+	if h.ExecMainExitTimestamp == "" && h.InactiveEnterTimestamp == "" {
+		return true
+	}
+	for _, ts := range []string{h.InactiveEnterTimestamp, h.ExecMainExitTimestamp} {
+		if t, ok := parseSystemdTimestamp(ts); ok && time.Since(t) < crashLoopWindow {
+			return true
+		}
+	}
+	return false
+}
+
+// resetFailureCounter is the optional controller surface that can clear
+// systemd's start-rate-limit and restart counter.
+type resetFailureCounter interface {
+	ResetFailed() error
+}
+
 // Control performs a lifecycle action and verifies the result.
 func (s *Server) Control(ctx context.Context, action Action) ActionResult {
 	res := ActionResult{Action: string(action)}
+
+	// A unit that hit the start limit refuses to start ("start request
+	// repeated too quickly") until reset-failed clears it. Clearing before
+	// every start/restart makes the panel's Start button the recovery path
+	// for a crashed server rather than a dead end.
+	if action != ActionStop {
+		if r, ok := s.sysd.(resetFailureCounter); ok {
+			_ = r.ResetFailed()
+		}
+	}
 
 	var err error
 	switch action {
@@ -87,6 +167,20 @@ func (s *Server) Control(ctx context.Context, action Action) ActionResult {
 	res.Active = active
 	res.Sub = sub
 
+	// A start that lands inside a crash loop is not a start: is-active says
+	// "active" during the few seconds the process lives, but the unit has
+	// already been restarted several times and will be again. Answer with the
+	// journal tail, exactly like any other failed start.
+	h := s.unitHealth()
+	if wantActive && crashLooping(h) {
+		res.Failed = true
+		res.Active = false
+		res.Sub = h.SubState
+		res.Message = crashLoopMessage(h)
+		res.Log = s.journalTail()
+		return res
+	}
+
 	switch {
 	case wantActive && active && sub != "failed":
 		res.Message = "Server is running. It needs up to a minute to finish loading the map before players can connect."
@@ -103,6 +197,24 @@ func (s *Server) Control(ctx context.Context, action Action) ActionResult {
 		res.Message = "Server stopped."
 	}
 	return res
+}
+
+// crashLoopMessage explains a restart loop in terms of what actually killed
+// the process, since "restarted 5 times" alone gives the operator nothing to
+// act on. The common segfault signature (SIGSEGV, "Failed to initialize
+// Steamworks SDK" in the journal) means a broken Steam runtime link.
+func crashLoopMessage(h UnitHealthState) string {
+	msg := "The server keeps crashing on startup — systemd restarted it " +
+		fmt.Sprint(h.NRestarts) + " times in the last minute and then gave up."
+	switch {
+	case h.ExecMainCode == "killed" && h.ExecMainStatus == 11:
+		msg += " The process died with a segmentation fault (SIGSEGV) — a missing or broken steamclient.so under ~/.steam/sdk64 is the usual cause; check the log below."
+	case h.ExecMainCode == "killed" && h.ExecMainStatus > 0:
+		msg += " The process was killed by signal " + fmt.Sprint(h.ExecMainStatus) + "; the log below shows why."
+	case h.ExecMainCode == "exited" && h.ExecMainStatus > 0:
+		msg += " The process exited with status " + fmt.Sprint(h.ExecMainStatus) + "; the log below shows why."
+	}
+	return msg
 }
 
 // awaitState polls the unit until the requested state is reached and holds.

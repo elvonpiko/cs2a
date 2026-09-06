@@ -144,15 +144,52 @@ func (s *Systemd) UnitUser() string {
 	return strings.TrimSpace(string(out))
 }
 
+// UnitHealthState carries the extra systemd properties Status needs to tell
+// "loading the map" apart from "restarting for the fifth time in a row".
+//
+// The user-facing bug: a server whose binary segfaults on boot (missing
+// steamclient.so) sits in active/auto-restart flip-flop forever. The panel
+// showed "Running" (systemd's word) beside an RCON connection-refused card,
+// promised the map was loading, then flipped to "Offline" and back — a loop
+// with no explanation, on the very first deploy.
+type UnitHealthState struct {
+	ActiveState string
+	SubState    string
+	Result      string
+	// NRestarts is systemd's counter since the last successful start.
+	NRestarts int
+	// ExecMainStatus is the exit status of the last run (139 = SIGSEGV etc.).
+	ExecMainStatus int
+	// ExecMainCode is the exit code classification ("exited", "killed", …).
+	ExecMainCode string
+	// ExecMainExitTimestamp is when the last run ended (unix format when parseable).
+	ExecMainExitTimestamp string
+	// InactiveEnterTimestamp is when the unit last left the active state:
+	// the most recent death. Crash-loop detection needs it because NRestarts
+	// is cumulative since the last clean stop, so five restarts spread over
+	// weeks of a healthy server must not read as a loop.
+	InactiveEnterTimestamp string
+}
+
 // ActiveState reports systemd's ActiveState/SubState pair plus the unit's
 // Result. "failed" units and units that never started need different operator
 // text, and a plain is-active check cannot tell them apart.
 func (s *Systemd) ActiveState() (active, sub, result string) {
+	h := s.UnitHealth()
+	return h.ActiveState, h.SubState, h.Result
+}
+
+// UnitHealth reads the systemd properties that decide whether the unit is
+// genuinely up or crash-looping.
+func (s *Systemd) UnitHealth() UnitHealthState {
+	var h UnitHealthState
 	cmd := exec.Command(s.bin, "show", s.serviceName,
-		"--property=ActiveState", "--property=SubState", "--property=Result", "--no-pager")
+		"--property=ActiveState", "--property=SubState", "--property=Result",
+		"--property=NRestarts", "--property=ExecMainStatus", "--property=ExecMainCode",
+		"--property=ExecMainExitTimestamp", "--property=InactiveEnterTimestamp", "--no-pager")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", "", ""
+		return h
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
@@ -161,12 +198,22 @@ func (s *Systemd) ActiveState() (active, sub, result string) {
 		}
 		switch k {
 		case "ActiveState":
-			active = v
+			h.ActiveState = v
 		case "SubState":
-			sub = v
+			h.SubState = v
 		case "Result":
-			result = v
+			h.Result = v
+		case "NRestarts":
+			h.NRestarts, _ = strconv.Atoi(v)
+		case "ExecMainStatus":
+			h.ExecMainStatus, _ = strconv.Atoi(v)
+		case "ExecMainCode":
+			h.ExecMainCode = v
+		case "ExecMainExitTimestamp":
+			h.ExecMainExitTimestamp = v
+		case "InactiveEnterTimestamp":
+			h.InactiveEnterTimestamp = v
 		}
 	}
-	return active, sub, result
+	return h
 }

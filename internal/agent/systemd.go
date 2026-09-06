@@ -54,6 +54,15 @@ func (s *Systemd) run(timeout time.Duration, args ...string) error {
 // Start starts the unit (no-op if already running).
 func (s *Systemd) Start() error { return s.run(30*time.Second, "start", s.serviceName) }
 
+// ResetFailed clears the unit's failure state: the start-rate-limit counter
+// (without this, systemd refuses a start with "start request repeated too
+// quickly" after a crash loop) and the restart counter the panel uses to
+// detect the loop in the first place. Idempotent: it succeeds on units with
+// no failure recorded.
+func (s *Systemd) ResetFailed() error {
+	return s.run(30*time.Second, "reset-failed", s.serviceName)
+}
+
 // Stop stops the unit.
 func (s *Systemd) Stop() error { return s.run(60*time.Second, "stop", s.serviceName) }
 

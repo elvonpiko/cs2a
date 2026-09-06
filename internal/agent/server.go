@@ -48,6 +48,15 @@ type ServiceStatus struct {
 	Sub           string  `json:"sub,omitempty"`
 	Enabled       bool    `json:"enabled"`
 	UptimeSeconds float64 `json:"uptime_seconds,omitempty"`
+	// CrashLooping is set when systemd has restarted the unit repeatedly in
+	// a short window: the binary dies during startup and waiting cannot fix
+	// it. The panel renders a hard error with the journal tail instead of
+	// the usual "give it a minute to load the map".
+	CrashLooping bool `json:"crash_looping,omitempty"`
+	// RestartCount backs CrashLooping in the UI ("restarted 5 times").
+	RestartCount int    `json:"restart_count,omitempty"`
+	ExitCode     int    `json:"exit_code,omitempty"`
+	ExitCodeKind string `json:"exit_code_kind,omitempty"`
 }
 
 // FullStatus is the /api/v1/server/status payload.
@@ -76,6 +85,23 @@ func (s *Server) Status(ctx context.Context) FullStatus {
 	if secs, ok := s.sysd.UptimeSeconds(); ok {
 		out.Service.UptimeSeconds = secs
 	}
+
+	// A crash-looping unit answers "active" for a few seconds at a time;
+	// the poller then flips between "Running" and "Offline" forever while
+	// promising the map is loading. Detect it once and stop pretending.
+	h := s.unitHealth()
+	out.Service.Sub = h.SubState
+	out.Service.ExitCode = h.ExecMainStatus
+	out.Service.ExitCodeKind = h.ExecMainCode
+	if crashLooping(h) {
+		out.Service.Active = false
+		out.Service.CrashLooping = true
+		out.Service.RestartCount = h.NRestarts
+		out.Service.UptimeSeconds = 0
+		out.Note = joinNotes(out.Note, "the game server keeps crashing on startup")
+		return out
+	}
+
 	if !active {
 		return out
 	}
