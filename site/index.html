@@ -73,6 +73,17 @@
 	@keyframes reticle { to { transform: rotate(360deg); } }
 	.wordmark { font-size: 21px; font-weight: 640; letter-spacing: -.02em; }
 	.wordmark i { font-style: normal; color: var(--signal); }
+	.spacer { flex: 1; }
+	.repo {
+		display: inline-flex; align-items: center; gap: 7px; flex: none;
+		color: var(--muted); text-decoration: none;
+		border: 1px solid var(--line-strong); border-radius: 8px;
+		padding: 6px 12px; font-size: 12.5px; font-weight: 560;
+		transition: color .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
+	}
+	.repo:hover { color: var(--text); border-color: rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .04); }
+	.repo:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 2px; }
+	.repo svg { width: 15px; height: 15px; fill: currentColor; }
 
 	h1 { margin: 0 0 8px; font-size: 25px; font-weight: 640; letter-spacing: -.02em; }
 	.sub { margin: 0 0 26px; color: var(--muted); font-size: 14.5px; max-width: 52ch; }
@@ -92,6 +103,12 @@
 	.copy:hover { color: var(--text); border-color: rgba(255, 255, 255, .26); background: rgba(255, 255, 255, .04); }
 	.copy:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 2px; }
 	.copy.done { color: var(--signal); border-color: var(--signal-line); background: var(--signal-wash); }
+
+	.source {
+		margin-top: 10px; color: var(--faint); font-size: 12.5px;
+	}
+	.source a { color: var(--steel); text-decoration: none; }
+	.source a:hover { text-decoration: underline; }
 
 	.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 24px; }
 	@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .card { padding: 30px 22px; } }
@@ -127,6 +144,11 @@
 			<circle cx="16" cy="16" r="3.4" fill="currentColor"></circle>
 		</svg>
 		<span class="wordmark">cs<i>2</i>a</span>
+		<span class="spacer"></span>
+		<a class="repo" href="https://github.com/elvonpiko/cs2a" aria-label="cs2a on GitHub">
+			<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+			<span>elvonpiko/cs2a</span>
+		</a>
 	</div>
 	<h1>A Counter-Strike 2 server manager that stays out of the way</h1>
 	<p class="sub">Web panel for admins and players, plus a small agent on the VPS. One command sets it up, discovers what your machine already has, and installs only what is missing.</p>
@@ -135,16 +157,21 @@
 		<span id="cmd">curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo bash</span>
 		<button class="copy" id="copy" type="button">copy</button>
 	</div>
+	<p class="source">
+		Prefer to start from source? Clone the
+		<a href="https://github.com/elvonpiko/cs2a">repository</a>, read the
+		<a href="https://github.com/elvonpiko/cs2a#readme">README</a> and run the same installer from a checkout.
+	</p>
 	<div class="grid">
 		<div class="feat"><b>Adopts your server</b><span>Finds the CS2 install, systemd unit, game port and RCON password on its own — nothing clobbered.</span></div>
 		<div class="feat"><b>Plugin catalog</b><span>Metamod, CounterStrikeSharp, WeaponPaints, MatchZy, retakes and more — one click, always the current release.</span></div>
-		<div class="feat"><b>Full cosmetics</b><span>Knives, gloves and agents per player, per side — synced like the official loadout.</span></div>
+		<div class="feat"><b>Full cosmetics</b><span>Weapon skins, knives, gloves and agents per player, per side — synced like the official loadout.</span></div>
 		<div class="feat"><b>Stays light</b><span>Two small Go binaries and SQLite. No containers, no runtime, no bloat.</span></div>
 	</div>
 	<p class="foot">
 		Reruns are safe: existing credentials are reused, not rotated. Pin a version with
-		<code>sudo CS2A_VERSION=v0.1.0 bash</code> after the pipe. Source on
-		<a href="https://github.com/elvonpiko/cs2a">GitHub</a>.
+		<code>sudo CS2A_VERSION=v0.3.0 bash</code> after the pipe.
+		Releases, docs and issues live on <a href="https://github.com/elvonpiko/cs2a">GitHub</a>.
 	</p>
 </main>
 <script>
