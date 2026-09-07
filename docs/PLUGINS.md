@@ -27,6 +27,9 @@ so the panel always offers the current upstream build.
 |---|---|---|---|
 | Metamod:Source | runtime | `alliedmodders/metamod-source` (GitHub) | `mmsource-2.0.x-*-linux.tar.gz` |
 | CounterStrikeSharp | runtime | `roflmuffin/CounterStrikeSharp` | `counterstrikesharp-with-runtime-linux-*.zip` |
+| AnyBaseLib | cssharp plugin | `NickFox007/AnyBaseLibCS2` | `AnyBaseLib.zip` |
+| PlayerSettings | cssharp plugin | `NickFox007/PlayerSettingsCS2` | `PlayerSettings.zip` |
+| MenuManager | cssharp plugin | `NickFox007/MenuManagerCS2` | `MenuManager.zip` |
 | cs2-WeaponPaints | cssharp plugin | `Nereziel/cs2-WeaponPaints` | `WeaponPaints.zip` |
 | mm-cs2whitelist | metamod plugin | `FemboyKZ/mm-cs2whitelist` | `cs2whitelist-*-linux.zip` |
 | CS2-SimpleAdmin | cssharp plugin | `daffyyyy/CS2-SimpleAdmin` | `CS2-SimpleAdmin-*.zip` |
@@ -50,6 +53,20 @@ Two details that are easy to get wrong:
   hostnames at once) while GitHub answered fine. Resolution tries GitHub
   first and appends the drop URLs only when both name the identical artifact,
   so the recorded version and the installed file can never disagree.
+- **WeaponPaints' runtime dependencies are declared, not implied.** Upstream
+  needs AnyBaseLib (database layer) → PlayerSettings (persistence) →
+  MenuManager (the `!ws`/`!knife` menus); installing only WeaponPaints used
+  to succeed and then die at `MenuCapability.Get` on every boot. The catalog
+  now carries the whole chain in `Requires`, and the installer refuses to
+  uninstall a library something above it still needs.
+- **cssharp's release binary needs two OS-level fixes on modern distros.**
+  Its `counterstrikesharp.so` is linked with an executable stack
+  (`GNU_STACK = RWE`), which Debian 13 / Ubuntu 25.04 refuse to load — the
+  install now clears the flag in the ELF header itself (no patchelf needed).
+  And its bundled .NET runtime requires ICU: bootstrap installs the distro's
+  `libicu` package up front (the package name is resolved from `ldconfig`,
+  since it moves between releases — `libicu72`/`libicu74`/`libicu76`), and the
+  cssharp install warns if the library is still missing.
 - **Several releases ship near-identical assets.** MatchZy publishes
   `-with-cssharp-linux` and `-windows` bundles beside the plain zip; cs2-retakes
   publishes a `-no-map-configs` variant that leaves retakes unplayable without

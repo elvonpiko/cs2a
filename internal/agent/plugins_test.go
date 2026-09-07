@@ -45,6 +45,33 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 			},
 		})
 	})
+	// The NickFox007 libraries WeaponPaints requires: bare plugin folders,
+	// exactly like the real releases.
+	for repo, asset := range map[string]string{
+		"NickFox007/AnyBaseLibCS2":     "anybaselib.zip",
+		"NickFox007/PlayerSettingsCS2": "playersettings.zip",
+		"NickFox007/MenuManagerCS2":    "menumanager.zip",
+	} {
+		mux.HandleFunc("/repos/"+repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(GHRelease{
+				TagName: "v1.0.0",
+				Assets:  []GHAsset{{Name: asset, URL: base + "/assets/" + asset}},
+			})
+		})
+	}
+	mux.HandleFunc("/assets/anybaselib.zip", func(w http.ResponseWriter, r *http.Request) {
+		zipBytes, _ := makeZip(map[string][]byte{"AnyBaseLib/AnyBaseLib.dll": {3}})
+		w.Write(zipBytes)
+	})
+	mux.HandleFunc("/assets/playersettings.zip", func(w http.ResponseWriter, r *http.Request) {
+		zipBytes, _ := makeZip(map[string][]byte{"PlayerSettings/PlayerSettings.dll": {4}})
+		w.Write(zipBytes)
+	})
+	mux.HandleFunc("/assets/menumanager.zip", func(w http.ResponseWriter, r *http.Request) {
+		zipBytes, _ := makeZip(map[string][]byte{"MenuManager/MenuManager.dll": {5}})
+		w.Write(zipBytes)
+	})
+
 	// AlliedModders publishes a pointer file naming the current build; the
 	// versioned tarball sits next to it. Serving both is what makes the
 	// two-step resolution testable.
@@ -86,6 +113,9 @@ func fakeGH(t *testing.T) (*httptest.Server, *GHClient) {
 		zipBytes, _ := makeZip(map[string][]byte{
 			"addons/counterstrikesharp/api/CSSharp.dll": {1},
 			"addons/counterstrikesharp/dotnet/dotnet":   {2},
+			// the real release ships this .so linked with GNU_STACK RWE; the
+			// installer must clear it (Debian 13 refuses to load such objects)
+			"addons/counterstrikesharp/bin/linuxsteamrt64/counterstrikesharp.so": elfWithExecStack(t),
 		})
 		w.Header().Set("Content-Type", "application/zip")
 		w.Write(zipBytes)
@@ -194,11 +224,33 @@ func TestInstallerInstallsDepsAndRecordsState(t *testing.T) {
 		t.Fatalf("guidelines patch missing:\n%s", raw)
 	}
 
-	// state recorded for all three
-	for _, id := range []string{"metamod", "cssharp", "weaponpaints"} {
+	// state recorded for the whole chain: metamod ← cssharp ← the three
+	// NickFox007 libraries ← weaponpaints
+	for _, id := range []string{"metamod", "cssharp", "anybaselib", "playersettings", "menumanager", "weaponpaints"} {
 		if !in.IsInstalled(id) {
 			t.Errorf("%s not recorded as installed", id)
 		}
+	}
+	// The libraries land as plugin folders, exactly where cssharp loads them.
+	for _, d := range []string{"AnyBaseLib", "PlayerSettings", "MenuManager"} {
+		p := filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/plugins", d)
+		if !fileExists(p) {
+			t.Errorf("%s plugin folder missing after install", d)
+		}
+	}
+	// The .so the installer shipped had GNU_STACK RWE; the post-install step
+	// must have cleared it (that is what lets Debian 13 load it at all).
+	so := filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/bin/linuxsteamrt64/counterstrikesharp.so")
+	data, err := os.ReadFile(so)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, flags, err := gnuStackHeader(data)
+	if err != nil {
+		t.Fatalf("parse installed .so: %v", err)
+	}
+	if flags&0x1 != 0 {
+		t.Fatalf("counterstrikesharp.so still has an executable stack (flags=%#x)", flags)
 	}
 	// Owns is authoritative: uninstalling must not delete the shared addons/
 	// tree that every other plugin lives in.
@@ -352,6 +404,36 @@ func TestUninstallRefusesWhenSomethingDependsOnIt(t *testing.T) {
 	}
 	if err := in.Uninstall("metamod"); err != nil {
 		t.Fatalf("uninstall metamod: %v", err)
+	}
+}
+
+// The NickFox007 libraries are WeaponPaints' runtime requirements; removing
+// one out from under it must be refused with the plugin named, or a working
+// install degrades into a MenuCapability.Get crash on next boot.
+func TestUninstallRefusesToRemoveWeaponPaintsLibrary(t *testing.T) {
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+	in := NewInstaller(cfg, store, DefaultCatalog(), nil)
+	for _, id := range []string{"cssharp", "anybaselib", "playersettings", "menumanager", "weaponpaints"} {
+		if err := store.SetPluginState(PluginState{
+			Name: id, Version: "v1", Status: "installed",
+			Manifest: map[string]string{"top0": "addons/" + id},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := in.Uninstall("menumanager")
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if !strings.Contains(err.Error(), "WeaponPaints") {
+		t.Fatalf("the error must name the blocker: %v", err)
+	}
+	// a mid-chain library is protected by the same rule from both sides
+	err = in.Uninstall("playersettings")
+	if err == nil || !strings.Contains(err.Error(), "MenuManager") {
+		t.Fatalf("expected MenuManager to block playersettings: %v", err)
 	}
 }
 

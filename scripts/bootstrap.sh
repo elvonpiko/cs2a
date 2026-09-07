@@ -334,6 +334,25 @@ detect_os() {
   fi
 }
 
+# icu_pkg_name names this distro's ICU package for the package manager at
+# hand. apt versions the soname in the package name; the others keep a stable
+# one.
+icu_pkg_name() {
+  case "$PKG" in
+    apt)
+      # resolve from the apt cache so the version matches this release
+      local cand
+      for cand in $(apt-cache --generate pkgnames 2>/dev/null | grep -E '^libicu[0-9]+$' | sort -V | tail -1); do
+        printf '%s' "$cand"; return 0
+      done
+      printf 'libicu76'
+      ;;
+    dnf|yum) printf 'libicu' ;;
+    pacman) printf 'icu' ;;
+    *) printf 'libicu76' ;;
+  esac
+}
+
 # pkg_install installs packages with whatever package manager exists. It never
 # aborts the run: callers decide whether a missing package is fatal.
 pkg_install() {
@@ -605,6 +624,22 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   pkg_install "${MISSING[@]}" || die "could not install: ${MISSING[*]} — install them and rerun"
 fi
 ok "base tools present (curl, tar, gzip)"
+
+# CounterStrikeSharp's bundled .NET runtime needs ICU for globalization, and
+# the failure is late and cryptic ("Couldn't find a valid ICU package" in the
+# game journal after the first restart, once the operator has stopped
+# watching). The distro package name moves (libicu72 on Debian 12, libicu76
+# on 13, libicu74 on Ubuntu 24.04), so resolve it from ldconfig's soname
+# walk rather than hardcoding a version: whatever libicu.so the system has
+# (or installs) is the right one.
+ICU_PKGS=()
+ldconfig -p 2>/dev/null | grep -q 'libicuuc\.' || ICU_PKGS+=("$(icu_pkg_name)")
+if [[ ${#ICU_PKGS[@]} -gt 0 ]]; then
+  info "installing ICU (needed by CounterStrikeSharp's .NET runtime): ${ICU_PKGS[*]}"
+  apt_refresh
+  pkg_install "${ICU_PKGS[@]}" || warn "could not install ${ICU_PKGS[*]} — CounterStrikeSharp will fail to load until it is present"
+  ldconfig -p 2>/dev/null | grep -q 'libicuuc\.' && ok "ICU present" || warn "ICU still missing — CounterStrikeSharp needs it (apt install $(icu_pkg_name))"
+fi
 
 # A public address is only used for the printed URL, so nothing here may be
 # fatal. Each fallback ends in `|| true`: the bare `hostname -I` assignment used

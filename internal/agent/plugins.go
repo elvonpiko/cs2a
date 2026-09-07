@@ -638,6 +638,10 @@ func (in *Installer) runPostInstall(step string) error {
 		return in.placeWeaponPaintsGamedata()
 	case "whitelist-core-cfg":
 		return writeWhitelistCoreCFG(filepath.Join(in.cfg.CFGDir(), "cs2whitelist", "core.cfg"))
+	case "cssharp-execstack":
+		return clearExecStack(filepath.Join(in.cfg.CSGODir(), "addons", "counterstrikesharp", "bin", "linuxsteamrt64", "counterstrikesharp.so"))
+	case "cssharp-icu-check":
+		return checkICU()
 	default:
 		return fmt.Errorf("plugins: unknown post-install step %q", step)
 	}

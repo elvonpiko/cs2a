@@ -146,7 +146,59 @@ func DefaultCatalog() []CatalogEntry {
 				"addons/counterstrikesharp",
 				"addons/metamod/counterstrikesharp.vdf",
 			},
-			Homepage: "https://docs.cssharp.dev",
+			// The release binary is linked with an executable stack
+			// (GNU_STACK RWE). Debian 13 / Ubuntu 25.04 refuse to load such
+			// objects ("cannot enable executable stack as shared object
+			// requires"), so the install clears the flag on the file it just
+			// placed (see clearExecStack).
+			PostInstall: []string{"cssharp-execstack", "cssharp-icu-check"},
+			Homepage:    "https://docs.cssharp.dev",
+		},
+		{
+			// The three NickFox007 libraries WeaponPaints builds on: its
+			// menus are MenuManager screens, and player choices persist via
+			// PlayerSettings over AnyBaseLib's database layer. Upstream
+			// documents them as hard requirements, and a WeaponPaints install
+			// without them fails at runtime (MenuCapability.Get) rather than at
+			// install time — which is exactly the failure a dependency
+			// declaration prevents.
+			ID:          "anybaselib",
+			Name:        "AnyBaseLib",
+			Description: "Database access layer for CounterStrikeSharp plugins (SQLite/MySQL/PostgreSQL). Library dependency of PlayerSettings, MenuManager and WeaponPaints.",
+			Author:      "NickFox007",
+			Kind:        KindCSSharpPlugin,
+			Requires:    []string{"cssharp"},
+			Repo:        "NickFox007/AnyBaseLibCS2",
+			AssetRegex:  `(?i)^anybaselib\.zip$`,
+			Dest:        cssharpPlugins,
+			Owns:        []string{cssharpPlugins + "/AnyBaseLib"},
+			Homepage:    "https://github.com/NickFox007/AnyBaseLibCS2",
+		},
+		{
+			ID:          "playersettings",
+			Name:        "PlayerSettings",
+			Description: "Per-player persistent settings storage (ClientCookies analogue). Library dependency of MenuManager and WeaponPaints.",
+			Author:      "NickFox007",
+			Kind:        KindCSSharpPlugin,
+			Requires:    []string{"cssharp", "anybaselib"},
+			Repo:        "NickFox007/PlayerSettingsCS2",
+			AssetRegex:  `(?i)^playersettings\.zip$`,
+			Dest:        cssharpPlugins,
+			Owns:        []string{cssharpPlugins + "/PlayerSettings"},
+			Homepage:    "https://github.com/NickFox007/PlayerSettingsCS2",
+		},
+		{
+			ID:          "menumanager",
+			Name:        "MenuManager",
+			Description: "In-game menu system for CounterStrikeSharp plugins. WeaponPaints renders its !ws / !knife menus through it.",
+			Author:      "NickFox007",
+			Kind:        KindCSSharpPlugin,
+			Requires:    []string{"cssharp", "anybaselib", "playersettings"},
+			Repo:        "NickFox007/MenuManagerCS2",
+			AssetRegex:  `(?i)^menumanager\.zip$`,
+			Dest:        cssharpPlugins,
+			Owns:        []string{cssharpPlugins + "/MenuManager"},
+			Homepage:    "https://github.com/NickFox007/MenuManagerCS2",
 		},
 		{
 			ID:          "weaponpaints",
@@ -154,8 +206,13 @@ func DefaultCatalog() []CatalogEntry {
 			Description: "Player-selected weapon, knife, glove and agent skins applied server-side. Backed by a MySQL database — cs2a writes players' loadout choices straight into it.",
 			Author:      "Nereziel",
 			Kind:        KindCSSharpPlugin,
-			Requires:    []string{"cssharp"},
-			Repo:        "Nereziel/cs2-WeaponPaints",
+			// Upstream's own dependency tree: the plugin builds on cssharp's
+			// API, AnyBaseLib's database layer, PlayerSettings for persistence
+			// and MenuManager for its in-game menus. Installing only
+			// WeaponPaints left it failing at MenuCapability.Get on every
+			// boot, which is why the whole chain is declared here.
+			Requires: []string{"cssharp", "anybaselib", "playersettings", "menumanager"},
+			Repo:     "Nereziel/cs2-WeaponPaints",
 			// The release also carries WeaponPaints-Website.zip, which is the
 			// PHP web UI and must not be installed onto the game server.
 			AssetRegex:  `(?i)^weaponpaints(-[^/]*)?\.zip$`,
