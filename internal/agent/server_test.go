@@ -352,7 +352,7 @@ func TestServerSetPasswordAndSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := srv.SetPassword(context.Background(), "roundtrip"); err != nil {
+	if _, err := srv.SetPassword(context.Background(), "roundtrip"); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(filepath.Join(cfg.CFGDir(), "server.cfg"))
@@ -369,7 +369,7 @@ func TestServerSetPasswordAndSettings(t *testing.T) {
 	}
 
 	// clearing password writes 0
-	if err := srv.SetPassword(context.Background(), ""); err != nil {
+	if _, err := srv.SetPassword(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	sent = fake.sent()

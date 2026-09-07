@@ -187,6 +187,7 @@ func (a *API) handleCosmetics(w http.ResponseWriter, r *http.Request) {
 		"gloves":       gloves,
 		"agents_t":     tAgents,
 		"agents_ct":    ctAgents,
+		"weapons":      Weapons(),
 		"sync_enabled": a.loadout.WPEnabled(),
 	})
 }
@@ -334,11 +335,16 @@ func (a *API) handlePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "password too long")
 		return
 	}
-	if err := a.server.SetPassword(r.Context(), req.Password); err != nil {
+	req.Password = strings.TrimSpace(req.Password)
+	lockedNow, err := a.server.SetPassword(r.Context(), req.Password)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	// locked_now tells the panel whether the map reload engaged: false means
+	// the server is offline (or unreachable) and the password applies at the
+	// next boot rather than immediately.
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "set": req.Password != "", "locked_now": lockedNow})
 }
 
 func (a *API) handlePlugins(w http.ResponseWriter, r *http.Request) {

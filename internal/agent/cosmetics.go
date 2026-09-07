@@ -191,3 +191,47 @@ func agentImage(abs string) string {
 	}
 	return "/static/img/agents/" + name
 }
+
+//go:embed data/weapons.json
+var weaponsJSON []byte
+
+// WeaponSkinEntry is one paint option for one weapon.
+type WeaponSkinEntry struct {
+	Paint int    `json:"paint"` // wp_player_skins.weapon_paint_id
+	Name  string `json:"name"`
+	Image string `json:"image,omitempty"` // Steam CDN URL
+}
+
+// WeaponEntry is one weapon with its selectable paint kits.
+type WeaponEntry struct {
+	Defindex int               `json:"defindex"` // wp_player_skins.weapon_defindex
+	Name     string            `json:"name"`
+	Team     string            `json:"team"` // "T", "CT" or "both"
+	Skins    []WeaponSkinEntry `json:"skins"`
+}
+
+// weaponsCache avoids re-decoding the 400 KB catalog per request. The file is
+// embedded; it never changes during a run.
+var weaponsCache []WeaponEntry
+
+// Weapons returns the gun-skin catalog: every regular weapon with the paint
+// kits WeaponPaints can apply to it, in name order. Knives and gloves are not
+// here — they have their own selectors (wp_player_knife / wp_player_gloves).
+func Weapons() []WeaponEntry {
+	if weaponsCache != nil {
+		return weaponsCache
+	}
+	var raw []WeaponEntry
+	if err := json.Unmarshal(weaponsJSON, &raw); err != nil {
+		return nil
+	}
+	// defensive sort: catalog order is name-sorted at build time, but the
+	// file is data, and a refreshed catalog should not shuffle the page.
+	sort.SliceStable(raw, func(i, j int) bool { return raw[i].Name < raw[j].Name })
+	for i := range raw {
+		skins := raw[i].Skins
+		sort.SliceStable(skins, func(a, b int) bool { return skins[a].Name < skins[b].Name })
+	}
+	weaponsCache = raw
+	return raw
+}

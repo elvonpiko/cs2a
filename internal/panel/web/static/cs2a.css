@@ -703,6 +703,29 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .shell > #plugin-jobs,
 .shell > #plugin-grid { animation: none; }
 
+/* --- weapon skins ---------------------------------------------------------- */
+/* One row per weapon: name, then a T and/or CT select. A grid of cards does
+   not scale to 34 weapons x ~40 skins, so this is a compact table with
+   sticky-ish header rhythm instead. */
+.skin-table { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.skin-row {
+	display: grid;
+	grid-template-columns: minmax(90px, 130px) 1fr 1fr;
+	gap: 10px;
+	align-items: center;
+	padding: 8px 10px;
+	background: var(--surface-1);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+}
+.skin-weapon { font-weight: 620; font-size: 13px; letter-spacing: .2px; }
+.skin-row .field { margin: 0; }
+.skin-row .field > span { font-size: 10.5px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+@media (max-width: 720px) {
+	.skin-row { grid-template-columns: 1fr; }
+	.skin-weapon { padding-top: 2px; }
+}
+
 /* --- reduced motion ------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {
 	*, *::before, *::after {

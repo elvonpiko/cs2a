@@ -43,7 +43,7 @@ Uninstall: `sudo bash scripts/uninstall.sh` (add `--purge` for config and data, 
 **Players**
 - Server info, read-only
 - Map change (the one action they get)
-- Loadout: knife, gloves and agent per side, picked from image galleries and synced to the server per SteamID — like the official in-game loadout
+- Loadout: knife, gloves, agent and weapon skins per side, picked from image galleries and synced to the server per SteamID — like the official in-game loadout
 
 ## How it fits together
 

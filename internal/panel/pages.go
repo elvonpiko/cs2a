@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -583,16 +584,24 @@ func (s *Server) handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 		redirectFlash(w, r, "/access", "err", "Password too long.")
 		return
 	}
-	if err := s.agent.SetPassword(r.Context(), pw); err != nil {
+	lockedNow, err := s.agent.SetPassword(r.Context(), pw)
+	if err != nil {
 		redirectFlash(w, r, "/access", "err", "Could not set password: "+err.Error())
 		return
 	}
-	detail := "set"
-	if pw == "" {
-		detail = "cleared"
+	var detail string
+	switch {
+	case pw == "" && lockedNow:
+		detail = "cleared — the map reloaded, the server is public again"
+	case pw == "":
+		detail = "cleared — it applies when the server next starts (it is offline right now)"
+	case lockedNow:
+		detail = "set — the map reloaded so it locks right away"
+	default:
+		detail = "set — it applies when the server next starts (it is offline right now)"
 	}
 	s.store.Audit(u.Username, "access.password", detail)
-	redirectFlash(w, r, "/access", "ok", "Server password "+detail+" — applies live, no restart needed.")
+	redirectFlash(w, r, "/access", "ok", "Server password "+detail+".")
 }
 
 func (s *Server) handleAccessWhitelist(w http.ResponseWriter, r *http.Request) {
@@ -749,8 +758,8 @@ var knifeCatalog = []web.KnifeOption{
 func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	v := web.LoadoutView{SteamID: u.SteamID64, KnifeNames: knifeCatalog}
-	// catalogs (gloves/agents) come from the agent; fall back to empty lists
-	if gloves, agentsT, agentsCT, err := s.agent.Cosmetics(r.Context()); err == nil {
+	// catalogs (gloves/agents/weapons) come from the agent; fall back to empty lists
+	if gloves, agentsT, agentsCT, weapons, err := s.agent.Cosmetics(r.Context()); err == nil {
 		for _, g := range gloves {
 			v.Gloves = append(v.Gloves, web.GloveOption{Value: gloveValue(g.Defindex, g.Paint), Label: g.Name, Image: g.Image})
 		}
@@ -759,6 +768,21 @@ func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, a := range agentsCT {
 			v.AgentsCT = append(v.AgentsCT, web.AgentOption{Value: a.Model, Label: a.Name, Image: a.Image})
+		}
+		for _, w := range weapons {
+			def := strconv.Itoa(w.Defindex)
+			wo := web.WeaponOption{
+				Defindex:      w.Defindex,
+				Name:          w.Name,
+				Team:          w.Team,
+				NameT:         "skin_t[" + def + "]",
+				NameCT:        "skin_ct[" + def + "]",
+				DefindexLabel: def,
+			}
+			for _, sk := range w.Skins {
+				wo.Skins = append(wo.Skins, web.WeaponSkinOption{Value: strconv.Itoa(sk.Paint), Label: sk.Name, Image: sk.Image})
+			}
+			v.Weapons = append(v.Weapons, wo)
 		}
 	}
 	if u.SteamID64 != "" {
@@ -770,6 +794,8 @@ func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 			v.GlovesCT = lo.GlovesCT
 			v.AgentT = lo.AgentT
 			v.AgentCT = lo.AgentCT
+			v.SkinT = lo.SkinsT
+			v.SkinCT = lo.SkinsCT
 			v.SyncEnabled = lo.SyncEnabled
 		}
 	}
@@ -800,6 +826,8 @@ func (s *Server) handleLoadoutPost(w http.ResponseWriter, r *http.Request) {
 		GlovesCT: validGlove(r.FormValue("gloves_ct")),
 		AgentT:   validAgent(r.FormValue("agent_t")),
 		AgentCT:  validAgent(r.FormValue("agent_ct")),
+		SkinsT:   s.validSkins(r, "skin_t"),
+		SkinsCT:  s.validSkins(r, "skin_ct"),
 	}
 	syncEnabled, warning, err := s.agent.PutLoadout(r.Context(), u.SteamID64, lo)
 	if err != nil {
@@ -822,6 +850,58 @@ func (s *Server) handleLoadoutPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirectFlash(w, r, "/loadout", "ok", "Loadout saved — it applies when you (re)connect. Use !wp in game to force a refresh.")
+}
+
+// validSkins collects the per-weapon skin picks ("skin_t[7]=421") from the
+// form. Values are validated against the agent's weapon catalog — a made-up
+// paint id would write a row WeaponPaints cannot render, and a made-up
+// defindex a row it would never read. A missing catalog (agent unreachable)
+// fails the save elsewhere; here it means no picks survive, which is the safe
+// direction: no rows are written from unvalidated input.
+func (s *Server) validSkins(r *http.Request, prefix string) map[string]string {
+	out := map[string]string{}
+	if err := r.ParseForm(); err != nil {
+		return out
+	}
+	var catalog map[string]map[string]bool // defindex -> paint ids
+	buildCatalog := func() {
+		if catalog != nil {
+			return
+		}
+		catalog = map[string]map[string]bool{}
+		if _, _, _, weapons, err := s.agent.Cosmetics(r.Context()); err == nil {
+			for _, w := range weapons {
+				paints := map[string]bool{}
+				for _, sk := range w.Skins {
+					paints[strconv.Itoa(sk.Paint)] = true
+				}
+				catalog[strconv.Itoa(w.Defindex)] = paints
+			}
+		}
+	}
+	for key, vals := range r.Form {
+		if !strings.HasPrefix(key, prefix+"[") || !strings.HasSuffix(key, "]") {
+			continue
+		}
+		def := strings.TrimSuffix(strings.TrimPrefix(key, prefix+"["), "]")
+		if def == "" || len(vals) == 0 {
+			continue
+		}
+		paint := strings.TrimSpace(vals[len(vals)-1])
+		if paint == "" {
+			// Explicit "no skin": record it so the agent deletes the row.
+			out[def] = ""
+			continue
+		}
+		buildCatalog()
+		if paints, ok := catalog[def]; ok && paints[paint] {
+			out[def] = paint
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // validGlove keeps "<defindex>:<paint>" or empty.

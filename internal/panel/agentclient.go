@@ -345,8 +345,18 @@ func (c *AgentClient) PutSettings(ctx context.Context, settings []Setting) (stri
 }
 
 // SetPassword sets/clears sv_password.
-func (c *AgentClient) SetPassword(ctx context.Context, pw string) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/password", map[string]string{"password": pw}, nil)
+// SetPassword sets (or clears, when pw is empty) sv_password. The bool says
+// whether the map reload engaged: when false the server was offline or
+// unreachable, the password is in server.cfg but only enforced from the next
+// boot — the difference the page has to be honest about.
+func (c *AgentClient) SetPassword(ctx context.Context, pw string) (lockedNow bool, err error) {
+	var out struct {
+		LockedNow bool `json:"locked_now"`
+	}
+	if err := c.do(ctx, http.MethodPut, "/api/v1/password", map[string]string{"password": pw}, &out); err != nil {
+		return false, err
+	}
+	return out.LockedNow, nil
 }
 
 // PluginEntry is one catalog item as returned by the agent.
@@ -502,13 +512,31 @@ func (c *AgentClient) Jobs(ctx context.Context) ([]Job, error) {
 
 // PlayerLoadout is the agent-side loadout for one steamid.
 type PlayerLoadout struct {
-	KnifeT      string `json:"knife_t"`
-	KnifeCT     string `json:"knife_ct"`
-	GlovesT     string `json:"gloves_t,omitempty"`
-	GlovesCT    string `json:"gloves_ct,omitempty"`
-	AgentT      string `json:"agent_t,omitempty"`
-	AgentCT     string `json:"agent_ct,omitempty"`
-	SyncEnabled bool   `json:"-"`
+	KnifeT      string            `json:"knife_t"`
+	KnifeCT     string            `json:"knife_ct"`
+	GlovesT     string            `json:"gloves_t,omitempty"`
+	GlovesCT    string            `json:"gloves_ct,omitempty"`
+	AgentT      string            `json:"agent_t,omitempty"`
+	AgentCT     string            `json:"agent_ct,omitempty"`
+	SkinsT      map[string]string `json:"skins_t,omitempty"`
+	SkinsCT     map[string]string `json:"skins_ct,omitempty"`
+	SyncEnabled bool              `json:"-"`
+}
+
+// WeaponCatalogEntry is one weapon with its paint kits, as the agent serves
+// it from the embedded catalog.
+type WeaponCatalogEntry struct {
+	Defindex int                      `json:"defindex"`
+	Name     string                   `json:"name"`
+	Team     string                   `json:"team"` // "T", "CT", "both"
+	Skins    []WeaponCatalogSkinEntry `json:"skins"`
+}
+
+// WeaponCatalogSkinEntry is one paint kit of one weapon.
+type WeaponCatalogSkinEntry struct {
+	Paint int    `json:"paint"`
+	Name  string `json:"name"`
+	Image string `json:"image,omitempty"`
 }
 
 // CosmeticEntry is one selectable glove/agent for the loadout UI.
@@ -521,28 +549,31 @@ type CosmeticEntry struct {
 }
 
 // Cosmetics fetches the glove/agent catalogs from the agent.
-func (c *AgentClient) Cosmetics(ctx context.Context) (gloves, agentsT, agentsCT []CosmeticEntry, err error) {
+func (c *AgentClient) Cosmetics(ctx context.Context) (gloves, agentsT, agentsCT []CosmeticEntry, weapons []WeaponCatalogEntry, err error) {
 	var out struct {
-		Gloves   []CosmeticEntry `json:"gloves"`
-		AgentsT  []CosmeticEntry `json:"agents_t"`
-		AgentsCT []CosmeticEntry `json:"agents_ct"`
+		Gloves   []CosmeticEntry      `json:"gloves"`
+		AgentsT  []CosmeticEntry      `json:"agents_t"`
+		AgentsCT []CosmeticEntry      `json:"agents_ct"`
+		Weapons  []WeaponCatalogEntry `json:"weapons"`
 	}
 	if err = c.do(ctx, http.MethodGet, "/api/v1/cosmetics", nil, &out); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return out.Gloves, out.AgentsT, out.AgentsCT, nil
+	return out.Gloves, out.AgentsT, out.AgentsCT, out.Weapons, nil
 }
 
 // GetLoadout fetches a player's loadout from the agent store.
 func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (*PlayerLoadout, error) {
 	var out struct {
 		Loadout struct {
-			KnifeT   string `json:"knife_t"`
-			KnifeCT  string `json:"knife_ct"`
-			GlovesT  string `json:"gloves_t"`
-			GlovesCT string `json:"gloves_ct"`
-			AgentT   string `json:"agent_t"`
-			AgentCT  string `json:"agent_ct"`
+			KnifeT   string            `json:"knife_t"`
+			KnifeCT  string            `json:"knife_ct"`
+			GlovesT  string            `json:"gloves_t"`
+			GlovesCT string            `json:"gloves_ct"`
+			AgentT   string            `json:"agent_t"`
+			AgentCT  string            `json:"agent_ct"`
+			SkinsT   map[string]string `json:"skins_t"`
+			SkinsCT  map[string]string `json:"skins_ct"`
 		} `json:"loadout"`
 		SyncEnabled bool `json:"sync_enabled"`
 	}
@@ -556,6 +587,8 @@ func (c *AgentClient) GetLoadout(ctx context.Context, steamid string) (*PlayerLo
 		GlovesCT:    out.Loadout.GlovesCT,
 		AgentT:      out.Loadout.AgentT,
 		AgentCT:     out.Loadout.AgentCT,
+		SkinsT:      out.Loadout.SkinsT,
+		SkinsCT:     out.Loadout.SkinsCT,
 		SyncEnabled: out.SyncEnabled,
 	}, nil
 }
@@ -575,6 +608,7 @@ func (c *AgentClient) PutLoadout(ctx context.Context, steamid string, lo *Player
 			"knife_t": lo.KnifeT, "knife_ct": lo.KnifeCT,
 			"gloves_t": lo.GlovesT, "gloves_ct": lo.GlovesCT,
 			"agent_t": lo.AgentT, "agent_ct": lo.AgentCT,
+			"skins_t": lo.SkinsT, "skins_ct": lo.SkinsCT,
 		}}, &out)
 	return out.SyncEnabled, out.Warning, err
 }

@@ -50,6 +50,9 @@ func (l *LoadoutStore) Close() {
 //   - gloves: "<defindex>:<paint>" (e.g. "5032:10010") → defindex into
 //     wp_player_gloves.weapon_defindex and the paint kit into wp_player_skins
 //   - agents: model path ("ctm_st6/ctm_st6_variantj") → wp_player_agents.agent_t/agent_ct
+//   - skins: gun skins per side, defindex → paint kit → wp_player_skins
+//     (weapon_defindex, weapon_paint_id, weapon_team). A "both teams" weapon
+//     can carry a different skin per side; the panel renders two selects.
 type Loadout struct {
 	KnifeT   string `json:"knife_t"`
 	KnifeCT  string `json:"knife_ct"`
@@ -57,6 +60,10 @@ type Loadout struct {
 	GlovesCT string `json:"gloves_ct,omitempty"`
 	AgentT   string `json:"agent_t,omitempty"`
 	AgentCT  string `json:"agent_ct,omitempty"`
+	// SkinsT/SkinsCT map weapon defindex ("7" = AK-47) to paint kit id
+	// ("421" = Asiimov). Missing key or empty paint = vanilla (row deleted).
+	SkinsT  map[string]string `json:"skins_t,omitempty"`
+	SkinsCT map[string]string `json:"skins_ct,omitempty"`
 }
 
 // WPEnabled reports whether WeaponPaints MySQL sync is active.
@@ -174,6 +181,45 @@ func (l *LoadoutStore) syncWP(steamid string, lo Loadout) error {
 			`INSERT INTO wp_player_agents (steamid, agent_ct, agent_t) VALUES (?, ?, ?)
 			 ON DUPLICATE KEY UPDATE agent_ct = VALUES(agent_ct), agent_t = VALUES(agent_t)`,
 			steamid, lo.AgentCT, lo.AgentT); err != nil {
+			return err
+		}
+	}
+	if err := l.syncWPSkins(ctx, steamid, 2, lo.SkinsT); err != nil {
+		return err
+	}
+	return l.syncWPSkins(ctx, steamid, 3, lo.SkinsCT)
+}
+
+// syncWPSkins writes one side's gun-skin rows into wp_player_skins (the same
+// table that holds glove paint kits, keyed by weapon defindex; guns are
+// 1–64, gloves 5030+, so the rows never collide).
+//
+// An empty value means vanilla: the row is deleted, because the plugin treats
+// paint <= 0 as "no change" and a stale row would survive a save that cleared
+// the skin in the UI.
+func (l *LoadoutStore) syncWPSkins(ctx context.Context, steamid string, team int, skins map[string]string) error {
+	for defindex, paint := range skins {
+		def, err := strconv.Atoi(defindex)
+		if err != nil || def <= 0 {
+			continue // not a defindex key; ignore rather than fail the save
+		}
+		if paint == "" {
+			if _, err := l.wp.ExecContext(ctx,
+				`DELETE FROM wp_player_skins WHERE steamid = ? AND weapon_team = ? AND weapon_defindex = ?`,
+				steamid, team, def); err != nil {
+				return err
+			}
+			continue
+		}
+		p, err := strconv.Atoi(paint)
+		if err != nil || p < 0 {
+			continue
+		}
+		if _, err := l.wp.ExecContext(ctx,
+			`INSERT INTO wp_player_skins (steamid, weapon_defindex, weapon_team, weapon_paint_id, weapon_wear, weapon_seed)
+			 VALUES (?, ?, ?, ?, 0.000001, 0)
+			 ON DUPLICATE KEY UPDATE weapon_paint_id = VALUES(weapon_paint_id)`,
+			steamid, def, team, p); err != nil {
 			return err
 		}
 	}

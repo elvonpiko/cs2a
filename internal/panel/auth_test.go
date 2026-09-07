@@ -80,9 +80,9 @@ func TestAgentClientPaths(t *testing.T) {
 					w.Write([]byte(`{"steamids":[]}`))
 				}
 			case "/api/v1/cosmetics":
-				w.Write([]byte(`{"gloves":[{"defindex":5032,"paint":10010,"name":"Hand Wraps","image":"/static/img/gloves/x.png"}],"agents_t":[{"model":"tm_leet_variantf","name":"Elite Crew","team":2}],"agents_ct":[{"model":"ctm_st6_variantj","name":"SEAL","team":3}]}`))
+				w.Write([]byte(`{"gloves":[{"defindex":5032,"paint":10010,"name":"Hand Wraps","image":"/static/img/gloves/x.png"}],"agents_t":[{"model":"tm_leet_variantf","name":"Elite Crew","team":2}],"agents_ct":[{"model":"ctm_st6_variantj","name":"SEAL","team":3}],"weapons":[{"defindex":7,"name":"AK-47","team":"T","skins":[{"paint":421,"name":"Asiimov","image":"https://x/y.png"},{"paint":180,"name":"Fire Serpent"}]}]}`))
 			case "/api/v1/loadout/76561197961500295":
-				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit","knife_ct":"weapon_bayonet","gloves_t":"5032:10010","gloves_ct":"5031:10008","agent_t":"tm_leet_variantf","agent_ct":"ctm_st6_variantj"},"sync_enabled":true}`))
+				w.Write([]byte(`{"loadout":{"knife_t":"weapon_knife_karambit","knife_ct":"weapon_bayonet","gloves_t":"5032:10010","gloves_ct":"5031:10008","agent_t":"tm_leet_variantf","agent_ct":"ctm_st6_variantj","skins_t":{"7":"421"},"skins_ct":{"9":"1026"}},"sync_enabled":true}`))
 			case "/api/v1/broken":
 				w.WriteHeader(http.StatusBadRequest)
 				w.Write([]byte(`{"error":"boom"}`))
@@ -95,7 +95,8 @@ func TestAgentClientPaths(t *testing.T) {
 		"/api/v1/plugins", "/api/v1/plugins/weaponpaints/install",
 		"/api/v1/whitelist", "/api/v1/loadout/76561197961500295", "/api/v1/broken",
 		"/api/v1/server/start", "/api/v1/server/stop", "/api/v1/server/restart",
-		"/api/v1/settings", "/api/v1/password", "/api/v1/map", "/api/v1/plugins/weaponpaints"} {
+		"/api/v1/settings", "/api/v1/password", "/api/v1/map", "/api/v1/plugins/weaponpaints",
+		"/api/v1/cosmetics"} {
 		mux.HandleFunc(p, record(strings.Split(p, "/")[3], p))
 	}
 	ts := httptest.NewServer(mux)
@@ -103,6 +104,21 @@ func TestAgentClientPaths(t *testing.T) {
 
 	c := NewAgentClient(ts.URL, "tok")
 	ctx := context.Background()
+
+	// cosmetics: weapons arrive with their paint kits
+	cosmGloves, cosmT, cosmCT, cosmW, cosmErr := c.Cosmetics(ctx)
+	if cosmErr != nil || len(cosmGloves) != 1 || len(cosmT) != 1 || len(cosmCT) != 1 {
+		t.Fatalf("Cosmetics: %v %d %d %d", cosmErr, len(cosmGloves), len(cosmT), len(cosmCT))
+	}
+	if len(cosmW) != 1 || cosmW[0].Defindex != 7 || cosmW[0].Team != "T" || len(cosmW[0].Skins) != 2 || cosmW[0].Skins[0].Paint != 421 {
+		t.Fatalf("Cosmetics weapons: %+v", cosmW)
+	}
+
+	// loadout: per-team skin picks round-trip
+	loSkin, loErr := c.GetLoadout(ctx, "76561197961500295")
+	if loErr != nil || loSkin.SkinsT["7"] != "421" || loSkin.SkinsCT["9"] != "1026" {
+		t.Fatalf("GetLoadout skins: %+v %v", loSkin, loErr)
+	}
 
 	// status
 	st, err := c.Status(ctx)
@@ -166,7 +182,7 @@ func TestAgentClientPaths(t *testing.T) {
 	}
 
 	// password / settings / changemap
-	if err := c.SetPassword(ctx, "pw"); err != nil {
+	if _, err := c.SetPassword(ctx, "pw"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.PutSettings(ctx, []Setting{{Name: "mp_maxrounds", Value: "24"}}); err != nil {

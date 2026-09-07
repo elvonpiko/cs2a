@@ -271,6 +271,33 @@ type LoadoutView struct {
 	Gloves      []GloveOption
 	AgentsT     []AgentOption
 	AgentsCT    []AgentOption
+	Weapons     []WeaponOption
+	// SkinT/SkinCT hold the current selection per weapon defindex ("7" →
+	// "421"), mirroring the agent's Loadout.SkinsT/SkinsCT.
+	SkinT  map[string]string
+	SkinCT map[string]string
+}
+
+// WeaponOption is one weapon with its paint kits. Team is "T", "CT" or
+// "both": the template shows one select per side, hiding the side a weapon
+// cannot spawn with. NameT/NameCT are the ready-built form field names
+// ("skin_t[7]") so the template stays string-concat free.
+type WeaponOption struct {
+	Defindex int
+	Name     string
+	Team     string
+	Skins    []WeaponSkinOption
+	NameT    string
+	NameCT   string
+	// DefindexLabel is the defindex as a string, for the pick helpers.
+	DefindexLabel string
+}
+
+// WeaponSkinOption is one paint kit for one weapon (Value = paint id).
+type WeaponSkinOption struct {
+	Value string
+	Label string
+	Image string
 }
 
 // KnifeOption is one selectable knife.
@@ -295,6 +322,9 @@ type AgentOption struct {
 
 // AccessView is the admin access page model.
 type AccessView struct {
+	// Password is only used as a boolean here (set / not set) — the value is
+	// never rendered. It arrives from the agent's settings list; the password
+	// card must not echo a secret back to whatever screen is open.
 	Password string
 	// WhitelistInstalled gates the whole whitelist card: the feature is a
 	// plugin, and describing "inactive — requires the CS2 Whitelist plugin"
@@ -318,4 +348,37 @@ type PluginConfigView struct {
 	JSON   string // pretty-printed current config
 	Exists bool
 	Note   string
+}
+
+// skinPick returns the selected paint id for one weapon ("" = none).
+func skinPick(m map[string]string, defindex string) string {
+	if m == nil {
+		return ""
+	}
+	return m[defindex]
+}
+
+// labelPasswordCard names the input field without ever showing the value.
+func labelPasswordCard(current string) string {
+	if current == "" {
+		return "Set a password"
+	}
+	return "Replace password"
+}
+
+// placeholderPasswordCard tells the operator what an empty save does, again
+// without the value.
+func placeholderPasswordCard(current string) string {
+	if current == "" {
+		return "empty = still no password"
+	}
+	return "empty = remove the password"
+}
+
+// submitLabelPasswordCard states the action the button performs.
+func submitLabelPasswordCard(current string) string {
+	if current == "" {
+		return "Set password"
+	}
+	return "Replace password"
 }

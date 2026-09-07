@@ -354,13 +354,40 @@ func (s *Server) pushSettingsLive(ctx context.Context, settings []cs2.CFGSetting
 }
 
 // SetPassword is a convenience wrapper: sets (or clears) sv_password.
-func (s *Server) SetPassword(ctx context.Context, password string) error {
+//
+// The live cvar alone does not reliably lock the door: CS2's connect-time
+// password check reads the value that was in effect at map load, so a
+// password pushed over RCON after boot shows as "protected" in queries while
+// clients still connect without one — an operator reported exactly that
+// ("I could still join with connect ip:port without any password"). Reloading
+// the current map re-runs the check with the new value, which is what a
+// restart would do without the downtime. It interrupts the round in progress,
+// which the panel says out loud; an operator setting a password wants the
+// door locked now.
+//
+// The bool says whether the reload actually happened: the password is always
+// in server.cfg, but when the server is offline the check only picks it up at
+// the next boot, and the panel must say that instead of promising a lock that
+// has not engaged.
+func (s *Server) SetPassword(ctx context.Context, password string) (lockedNow bool, err error) {
 	val := password
 	if strings.TrimSpace(val) == "" {
 		val = "0" // clearing
 	}
-	return s.ApplyManagedSettings(ctx, append(s.currentSettingsSans("sv_password"),
-		cs2.CFGSetting{Name: "sv_password", Value: val, Comment: "managed by cs2a"}))
+	if err := s.ApplyManagedSettings(ctx, append(s.currentSettingsSans("sv_password"),
+		cs2.CFGSetting{Name: "sv_password", Value: val, Comment: "managed by cs2a"})); err != nil {
+		return false, err
+	}
+	// Reload the map so the connect-time check uses the new value. The map
+	// comes from A2S (the map actually being played, not the launch default).
+	// Best-effort: the file is written, so a failure here only means
+	// enforcement waits for the next boot or map change.
+	if info, err := s.queryA2S(ctx); err == nil && info.Map != "" && reMapName.MatchString(info.Map) {
+		if s.rconFire("changelevel "+info.Map) == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Server) currentSettingsSans(name string) []cs2.CFGSetting {

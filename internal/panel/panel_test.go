@@ -29,7 +29,9 @@ type fakeAgent struct {
 	wlEnabled  bool
 	installs   int
 	loadout    map[string][2]string
-	plugins    string
+	// loadoutSkins captures the skins_t/skins_ct maps of the last save.
+	loadoutSkins [2]map[string]string
+	plugins      string
 	// actionFails makes lifecycle actions report a unit that would not start.
 	actionFails bool
 	// repairs counts rcon-repair calls.
@@ -141,7 +143,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.password = req.Password
-		w.Write([]byte(`{"ok":true}`))
+		w.Write([]byte(`{"ok":true,"locked_now":true}`))
 	})
 	mux.HandleFunc("PUT /api/v1/whitelist", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -252,8 +254,10 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		steamid := strings.TrimPrefix(r.URL.Path, "/api/v1/loadout/")
 		var req struct {
 			Loadout struct {
-				KnifeT  string `json:"knife_t"`
-				KnifeCT string `json:"knife_ct"`
+				KnifeT  string            `json:"knife_t"`
+				KnifeCT string            `json:"knife_ct"`
+				SkinsT  map[string]string `json:"skins_t"`
+				SkinsCT map[string]string `json:"skins_ct"`
 			} `json:"loadout"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -262,6 +266,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 			f.loadout = map[string][2]string{}
 		}
 		f.loadout[steamid] = [2]string{req.Loadout.KnifeT, req.Loadout.KnifeCT}
+		f.loadoutSkins = [2]map[string]string{req.Loadout.SkinsT, req.Loadout.SkinsCT}
 		syncOn := !f.loadoutSyncOff
 		f.mu.Unlock()
 		if syncOn {
@@ -269,6 +274,23 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 			return
 		}
 		w.Write([]byte(`{"ok":true,"sync_enabled":false}`))
+	})
+	mux.HandleFunc("GET /api/v1/cosmetics", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		w.Write([]byte(`{
+			"gloves": [{"defindex": 5032, "paint": 10010, "name": "Hand Wraps", "image": ""}],
+			"agents_t": [{"model": "tm_leet_variantf", "name": "Elite Crew"}],
+			"agents_ct": [{"model": "ctm_st6_variantj", "name": "SEAL"}],
+			"weapons": [
+				{"defindex": 7, "name": "AK-47", "team": "T",
+				 "skins": [{"paint": 421, "name": "Asiimov"}, {"paint": 180, "name": "Fire Serpent"}]},
+				{"defindex": 9, "name": "AWP", "team": "both",
+				 "skins": [{"paint": 344, "name": "Asiimov"}]}
+			],
+			"sync_enabled": true
+		}`))
 	})
 	mux.HandleFunc("GET /api/v1/loadout/", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -1360,5 +1382,114 @@ func TestWhitelistCardHiddenUntilPluginInstalled(t *testing.T) {
 	}
 	if strings.Contains(body, "ghost-card") {
 		t.Fatal("placeholder must be gone once the plugin is installed")
+	}
+}
+
+// The loadout page must show weapon skins alongside knives/gloves/agents, and
+// a save must carry the per-team picks to the agent — but only paints the
+// catalog actually offers (a fabricated paint id would write a
+// WeaponPaints row the plugin renders as nothing).
+func TestLoadoutWeaponSkins(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+		"steamid": {"76561197961500295"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/loadout")
+	for _, want := range []string{"Weapon skins", `name="skin_t[7]"`, `name="skin_ct[9]"`, "Asiimov", "Fire Serpent"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("loadout page missing %q:\n%s", want, body[:min(2500, len(body))])
+		}
+	}
+	// The AK is T-only: its CT select must not exist.
+	if strings.Contains(body, `name="skin_ct[7]"`) {
+		t.Fatal("T-only weapon must not render a CT select")
+	}
+
+	resp := postForm(t, client, base+"/loadout", url.Values{
+		"knife_t":    {"default"},
+		"skin_t[7]":  {"180"}, // valid: Fire Serpent
+		"skin_ct[9]": {"344"}, // valid: AWP Asiimov
+		"skin_t[9]":  {"999"}, // fabricated paint id: must be dropped
+		"skin_t[2]":  {"180"}, // defindex not in the catalog: dropped
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save: %d", resp.StatusCode)
+	}
+	fa.mu.Lock()
+	tSkins, ctSkins := fa.loadoutSkins[0], fa.loadoutSkins[1]
+	fa.mu.Unlock()
+	if tSkins["7"] != "180" {
+		t.Fatalf("T skins = %v, want AK Fire Serpent", tSkins)
+	}
+	if ctSkins["9"] != "344" {
+		t.Fatalf("CT skins = %v, want AWP Asiimov", ctSkins)
+	}
+	if _, ok := tSkins["9"]; ok {
+		t.Fatalf("fabricated paint survived validation: %v", tSkins)
+	}
+	if _, ok := tSkins["2"]; ok {
+		t.Fatalf("unknown defindex survived validation: %v", tSkins)
+	}
+
+	// Saving again with Vanilla clears the pick instead of leaving it.
+	_ = postForm(t, client, base+"/loadout", url.Values{"skin_t[7]": {""}})
+	fa.mu.Lock()
+	tSkins = fa.loadoutSkins[0]
+	fa.mu.Unlock()
+	if pick, ok := tSkins["7"]; !ok || pick != "" {
+		t.Fatalf("vanilla save must record the empty pick (row delete), got %q (present=%v)", pick, ok)
+	}
+}
+
+// The access page must never echo the password back: the settings endpoint
+// carries it, the badge only says whether one is set. And the save flash must
+// tell the truth about offline servers ("applies at next start"), not promise
+// a live lock that never engaged.
+func TestAccessPageNeverEchoesPassword(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	body := getBody(t, client, base+"/access")
+	if strings.Contains(body, "hunter2") {
+		t.Fatalf("the password value leaked into the page:\n%s", body[:min(2000, len(body))])
+	}
+	if !strings.Contains(body, "protected") {
+		t.Fatal("the badge must say a password is set (without the value)")
+	}
+	if !strings.Contains(body, `type="password"`) {
+		t.Fatal("the input must be a password field, not plaintext")
+	}
+	// the password input specifically must carry no value attribute (the
+	// whitelist toggle's hidden inputs legitimately do)
+	for _, line := range strings.Split(body, "\n") {
+		for _, frag := range strings.Split(line, "<input") {
+			if strings.Contains(frag, `name="password"`) && strings.Contains(frag, `value="`) {
+				t.Fatalf("the password input must not carry a prefilled value: %s", frag)
+			}
+		}
+	}
+
+	// Save with the server reachable: the flash promises the live lock.
+	fa.mu.Lock()
+	fa.password = ""
+	fa.mu.Unlock()
+	resp := postForm(t, client, base+"/access/password", url.Values{"password": {"s3cret"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "locks right away") {
+		t.Fatalf("online save must promise the live lock:\n%s", flash[:min(1200, len(flash))])
+	}
+	if strings.Contains(flash, "s3cret") {
+		t.Fatal("the flash must not repeat the new password")
 	}
 }

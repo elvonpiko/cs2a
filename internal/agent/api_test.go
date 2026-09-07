@@ -394,7 +394,11 @@ func TestAPIRCONCheckAndRepair(t *testing.T) {
 func TestAPILoadoutRoundTrip(t *testing.T) {
 	client, _, base, _ := newTestAPI(t)
 	resp, out := doJSON(t, client, "PUT", base, "/api/v1/loadout/76561197961500295", map[string]any{
-		"loadout": map[string]any{"knife_t": "weapon_knife_karambit", "knife_ct": "weapon_bayonet"},
+		"loadout": map[string]any{
+			"knife_t": "weapon_knife_karambit", "knife_ct": "weapon_bayonet",
+			"skins_t":  map[string]string{"7": "180"},
+			"skins_ct": map[string]string{"9": "344", "16": ""},
+		},
 	})
 	if resp.StatusCode != 200 {
 		t.Fatalf("put loadout: %d %v", resp.StatusCode, out)
@@ -407,8 +411,53 @@ func TestAPILoadoutRoundTrip(t *testing.T) {
 	if lo["knife_t"] != "weapon_knife_karambit" {
 		t.Fatalf("loadout = %v", out)
 	}
+	skinsT, _ := lo["skins_t"].(map[string]any)
+	if skinsT["7"] != "180" {
+		t.Fatalf("skins_t = %v", lo["skins_t"])
+	}
+	skinsCT, _ := lo["skins_ct"].(map[string]any)
+	if skinsCT["9"] != "344" || skinsCT["16"] != "" {
+		t.Fatalf("skins_ct = %v", lo["skins_ct"])
+	}
 	if out["sync_enabled"] != false {
 		t.Fatalf("sync should be disabled without wp_dsn")
+	}
+}
+
+// The cosmetics endpoint must serve the weapon catalog alongside gloves and
+// agents — the panel's skin selectors are built from it.
+func TestAPICosmeticsServesWeapons(t *testing.T) {
+	client, _, base, _ := newTestAPI(t)
+	resp, out := doJSON(t, client, "GET", base, "/api/v1/cosmetics", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("cosmetics: %d", resp.StatusCode)
+	}
+	weapons, _ := out["weapons"].([]any)
+	if len(weapons) == 0 {
+		t.Fatal("weapons catalog empty — the embedded data failed to load")
+	}
+	var ak, awp map[string]any
+	for _, w := range weapons {
+		m, _ := w.(map[string]any)
+		switch m["name"] {
+		case "AK-47":
+			ak = m
+		case "AWP":
+			awp = m
+		}
+	}
+	if ak == nil || awp == nil {
+		t.Fatalf("AK-47/AWP missing from catalog (have %d weapons)", len(weapons))
+	}
+	if ak["defindex"] != float64(7) || ak["team"] != "T" {
+		t.Fatalf("AK-47 entry = %v", ak)
+	}
+	if awp["defindex"] != float64(9) || awp["team"] != "both" {
+		t.Fatalf("AWP entry = %v", awp)
+	}
+	skins, _ := ak["skins"].([]any)
+	if len(skins) < 30 {
+		t.Fatalf("AK-47 skins = %d, expected the full paint list", len(skins))
 	}
 }
 
