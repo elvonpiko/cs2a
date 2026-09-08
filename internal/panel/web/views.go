@@ -344,6 +344,36 @@ type AccessView struct {
 	CFGWarning string
 }
 
+// AccessModeLabel names the effective access model for the summary strip:
+// who can join the game server right now. Password and whitelist are
+// independent layers — a passworded whitelisted server demands both.
+func (v AccessView) AccessModeLabel() string {
+	switch {
+	case v.WhitelistActive && v.Password != "":
+		return "Whitelist + password"
+	case v.WhitelistActive:
+		return "Whitelist only"
+	case v.Password != "":
+		return "Password only"
+	default:
+		return "Open to everyone"
+	}
+}
+
+// AccessModeDetail is the one-line "who can join" answer for the current mode.
+func (v AccessView) AccessModeDetail() string {
+	switch {
+	case v.WhitelistActive && v.Password != "":
+		return "Only the listed SteamIDs can connect, and they must also know the password. Everyone else is rejected at the door."
+	case v.WhitelistActive:
+		return "Only the listed SteamIDs can connect — everyone else is rejected, password or not."
+	case v.Password != "":
+		return "Anyone who knows the password can connect. Panel users do not skip it: being a user here changes nothing in game."
+	default:
+		return "Anyone on the internet can connect. Set a password or enforce the whitelist to keep it private."
+	}
+}
+
 // PluginConfigView is the plugin config editor page model.
 type PluginConfigView struct {
 	ID     string

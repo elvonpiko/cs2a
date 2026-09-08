@@ -703,6 +703,39 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .shell > #plugin-jobs,
 .shell > #plugin-grid { animation: none; }
 
+/* --- settings page ----------------------------------------------------------- */
+.sticky-actions {
+	position: sticky; bottom: 12px; z-index: 5;
+	background: var(--bg, #0a0b0e);
+	padding: 10px 0; border-top: 1px solid var(--border, rgba(255,255,255,.08));
+}
+
+/* --- access model summary ---------------------------------------------------- */
+.access-summary { margin-bottom: 14px; }
+.access-layers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+@media (max-width: 860px) { .access-layers { grid-template-columns: 1fr; } }
+.access-layers .layer {
+	padding: 10px 12px; border-radius: 10px;
+	background: var(--surface-2, rgba(255,255,255,.03));
+	border: 1px solid var(--border, rgba(255,255,255,.09));
+}
+.access-layers .layer b { display: block; font-size: 12.5px; margin-bottom: 3px; }
+.access-layers .layer span { color: var(--muted, #98a2b3); font-size: 12px; line-height: 1.45; }
+.access-layers .layer.on { border-color: var(--accent-line, rgba(72,224,176,.32)); }
+.access-layers .layer.on b { color: var(--accent, #48e0b0); }
+.access-layers .layer.off { opacity: .6; }
+
+/* --- connect address -------------------------------------------------------- */
+.addr-row { display: flex; align-items: center; gap: 8px; }
+.addr-row .addr {
+	flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+	padding: 8px 10px; font-size: 13px;
+	background: var(--surface-2, rgba(255,255,255,.04));
+	border: 1px solid var(--border, rgba(255,255,255,.1));
+	border-radius: 8px;
+}
+[data-copy][data-copy-done] { color: var(--accent, #48e0b0); border-color: var(--accent, #48e0b0); }
+
 /* --- weapon skins ---------------------------------------------------------- */
 /* One row per weapon: name, then a T and/or CT select. A grid of cards does
    not scale to 34 weapons x ~40 skins, so this is a compact table with

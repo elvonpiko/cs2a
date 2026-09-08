@@ -20,6 +20,37 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 		<div class="error-box">{ v.CFGWarning }</div>
 	}
 
+	// The two controls below are independent layers, and operators kept
+	// reading them as one feature: "I set a password, why can strangers
+	// join?" (client-cached password) and "I added a panel user, why were
+	// they rejected?" (panel users are not whitelist entries). One strip
+	// states the current mode and what actually gates a connection.
+	<div class="card access-summary">
+		<div class="row between">
+			<h2>Who can join right now</h2>
+			<span class={ "badge", templ.KV("green", v.Password != "" || v.WhitelistActive), templ.KV("grey", v.Password == "" && !v.WhitelistActive) }>{ v.AccessModeLabel() }</span>
+		</div>
+		<p class="sub">{ v.AccessModeDetail() }</p>
+		<div class="access-layers">
+			<div class={ "layer", templ.KV("on", v.Password != "") }>
+				<b>Password</b>
+				<span>Anyone with the password. Clients cache it after the first successful connect — the same player reconnects without typing it again, which looks like "no password needed".</span>
+			</div>
+			<div class={ "layer", templ.KV("on", v.WhitelistActive), templ.KV("off", v.WhitelistInstalled && !v.WhitelistActive) }>
+				<b>Whitelist</b>
+				if v.WhitelistInstalled {
+					<span>Only the listed SteamIDs connect; everyone else is rejected at connect. Independent of the password — with both on, a listed player still needs the password too.</span>
+				} else {
+					<span>Needs the CS2 Whitelist plugin (Plugins page). Without it there is no way to reject players outright — a password only filters who knows the secret.</span>
+				}
+			</div>
+			<div class="layer">
+				<b>Panel users</b>
+				<span>Accounts here sign into this web panel only. They never grant or bypass in-game access — link a SteamID to a user for the loadout page, and whitelist that SteamID if they should always get in.</span>
+			</div>
+		</div>
+	</div>
+
 	<div class="grid cols-2">
 		<div class="card">
 			<h2>Server password</h2>
@@ -166,6 +197,10 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 	<div class="page-head">
 		<h1>Users</h1>
 		<p>Panel accounts. Players sign in to see server info and manage their loadout.</p>
+		// Panel accounts are web-panel only: they never grant or gate in-game
+		// access. That line belongs here too, not just on the Access page,
+		// because this is the page where accounts are created.
+		<p class="hint">These accounts sign into this panel only — they do not affect who can join the game server (that is the Access page).</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {
