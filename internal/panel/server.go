@@ -76,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /plugins/{id}/config", s.admin(s.handlePluginConfigPost))
 	mux.HandleFunc("POST /plugins/{id}/install", s.admin(s.handlePluginInstall))
 	mux.HandleFunc("POST /plugins/{id}/uninstall", s.admin(s.handlePluginUninstall))
+	mux.HandleFunc("GET /settings", s.admin(s.handleSettingsPage))
+	mux.HandleFunc("POST /settings", s.admin(s.handleSettingsPost))
+	mux.HandleFunc("POST /settings/warmup", s.admin(s.handleSettingsWarmup))
 	mux.HandleFunc("GET /access", s.admin(s.handleAccessPage))
 	mux.HandleFunc("POST /access/password", s.admin(s.handleAccessPassword))
 	mux.HandleFunc("POST /access/whitelist", s.admin(s.handleAccessWhitelist))
@@ -84,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /users", s.admin(s.handleUsersPage))
 	mux.HandleFunc("POST /users/create", s.admin(s.handleUserCreate))
 	mux.HandleFunc("POST /users/delete", s.admin(s.handleUserDelete))
+	mux.HandleFunc("POST /users/role", s.admin(s.handleUserRole))
 	mux.HandleFunc("GET /loadout", s.auth(s.handleLoadoutPage))
 	mux.HandleFunc("POST /loadout", s.auth(s.handleLoadoutPost))
 

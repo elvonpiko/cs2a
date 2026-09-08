@@ -20,6 +20,14 @@ func fmtInt(n int) string { return strconv.Itoa(n) }
 // fmtInt64 renders an int64 for templ attribute values.
 func fmtInt64(n int64) string { return strconv.FormatInt(n, 10) }
 
+// fmtFloat renders a bound without a trailing .0 (min="5" not min="5.000000").
+func fmtFloat(f float64) string {
+	if f == float64(int64(f)) {
+		return strconv.FormatInt(int64(f), 10)
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
 // DownloadProgress fills the view's download fields from the job's live
 // byte counters. Downloading is only true while the transfer is actually in
 // flight (total known and bytes below it), so the bar appears for the phase
@@ -324,6 +332,19 @@ type AgentOption struct {
 }
 
 // AccessView is the admin access page model.
+// SettingsView renders the curated settings catalog (defined in
+// settings_catalog.go, same package) with the current values filled in.
+type SettingsView struct {
+	Groups     []SettingGroup
+	CFGWarning string
+	// ExtraCount is how many managed rows exist outside the catalog; saves
+	// preserve them, and the page says so instead of staying quiet.
+	ExtraCount int
+	// AgentDown replaces the form with an error when the settings could not
+	// be read (saving blind would overwrite the block).
+	AgentDown bool
+}
+
 type AccessView struct {
 	// Password is only used as a boolean here (set / not set) — the value is
 	// never rendered. It arrives from the agent's settings list; the password

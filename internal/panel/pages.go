@@ -725,6 +725,189 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	redirectFlash(w, r, "/users", "ok", "User "+target.Username+" deleted.")
 }
 
+// handleUserRole toggles a user between admin and player. The actor cannot
+// change their own role (an admin demoting themselves is how panels end up
+// adminless, and "promote yourself" needs no button), and the last admin
+// cannot be demoted (the store refuses; the handler says it in human words).
+func (s *Server) handleUserRole(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	var userID int64
+	if _, err := fmt.Sscanf(r.FormValue("user_id"), "%d", &userID); err != nil {
+		redirectFlash(w, r, "/users", "err", "Invalid user id.")
+		return
+	}
+	if userID == u.ID {
+		redirectFlash(w, r, "/users", "err", "You cannot change your own role.")
+		return
+	}
+	target, err := s.store.GetUserByID(userID)
+	if err != nil {
+		redirectFlash(w, r, "/users", "err", "User not found.")
+		return
+	}
+	newRole := "player"
+	if target.Role == "player" {
+		newRole = "admin"
+	}
+	if err := s.store.SetUserRole(userID, newRole); err != nil {
+		redirectFlash(w, r, "/users", "err", "Could not change role: "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "user.role", target.Username+" -> "+newRole)
+	redirectFlash(w, r, "/users", "ok", target.Username+" is now "+newRole+".")
+}
+
+// --- settings -----------------------------------------------------------------
+
+// handleSettingsPage renders the curated cvar catalog with the current managed
+// values filled in. sv_password is deliberately absent (Access page owns it);
+// its row in the managed block is preserved untouched by every save here.
+func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	v := web.SettingsView{Groups: web.SettingsCatalog()}
+
+	current := map[string]string{}
+	if settings, warning, err := s.agent.Settings(r.Context()); err == nil {
+		v.CFGWarning = warning
+		for _, set := range settings {
+			current[set.Name] = set.Value
+		}
+		// Non-catalog rows are preserved by the save; the page says how many
+		// exist so a save does not look like it might drop them.
+		for _, set := range settings {
+			if web.SpecByName(set.Name) == nil && set.Name != "sv_password" {
+				v.ExtraCount++
+			}
+		}
+	} else {
+		v.AgentDown = true
+	}
+	for gi := range v.Groups {
+		for ri := range v.Groups[gi].Rows {
+			name := v.Groups[gi].Rows[ri].Name
+			if val, ok := current[name]; ok {
+				v.Groups[gi].Rows[ri].Value = val
+				v.Groups[gi].Rows[ri].HasValue = true
+			}
+		}
+	}
+	comp := web.Base("Settings", navFor(u, "settings"), web.SettingsPage(navFor(u, "settings"), flash(r), v))
+	if err := comp.Render(r.Context(), w); err != nil {
+		s.log.Error("render settings", "err", err)
+	}
+}
+
+// handleSettingsPost validates every catalog field, merges with the managed
+// block (keeping sv_password and any non-catalog rows), and pushes the result
+// to the agent, which writes server.cfg and applies it live over one RCON
+// connection.
+func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		redirectFlash(w, r, "/settings", "err", "Bad form.")
+		return
+	}
+	// Start from what is in the file: anything the panel does not own must
+	// survive this save byte for byte.
+	current := []Setting{}
+	if settings, _, err := s.agent.Settings(r.Context()); err == nil {
+		current = settings
+	} else {
+		redirectFlash(w, r, "/settings", "err", "Could not read the current settings: "+err.Error())
+		return
+	}
+
+	// name -> row from the posted form (only catalog rows are accepted).
+	specs := web.AllSettingSpecs()
+	posted := map[string]string{}
+	for _, spec := range specs {
+		val := strings.TrimSpace(r.PostFormValue("set_" + spec.Name))
+		if val != "" || r.PostForm.Has("set_"+spec.Name) {
+			posted[spec.Name] = val
+		}
+	}
+
+	// Validate every posted value before writing anything: one bad field
+	// must not half-apply a batch.
+	updates := make([]Setting, 0, len(posted))
+	for _, spec := range specs {
+		val, ok := posted[spec.Name]
+		if !ok {
+			continue
+		}
+		if err := web.ValidateSettingValue(&spec, val); err != nil {
+			redirectFlash(w, r, "/settings", "err", spec.Label+": "+err.Error())
+			return
+		}
+		updates = append(updates, Setting{Name: spec.Name, Value: val, Comment: "managed by cs2a"})
+	}
+
+	// Merge: current block order first (sv_password + non-catalog rows keep
+	// their place and comments), then catalog rows that were not present.
+	merged := make([]Setting, 0, len(current)+len(updates))
+	seen := make(map[string]bool, len(current)+len(updates))
+	for _, set := range current {
+		if spec := web.SpecByName(set.Name); spec != nil {
+			// A curated row: the catalog's new value wins.
+			if val, ok := posted[set.Name]; ok {
+				merged = append(merged, Setting{Name: set.Name, Value: val, Comment: set.Comment})
+				seen[set.Name] = true
+				continue
+			}
+			// Not posted (the form posts every catalog field, but be safe):
+			// keep the current value untouched.
+			merged = append(merged, set)
+			seen[set.Name] = true
+			continue
+		}
+		// sv_password and unknown rows survive as-is.
+		merged = append(merged, set)
+		seen[set.Name] = true
+	}
+	for _, set := range updates {
+		if !seen[set.Name] {
+			merged = append(merged, set)
+		}
+	}
+
+	warning, err := s.agent.PutSettings(r.Context(), merged)
+	if err != nil {
+		redirectFlash(w, r, "/settings", "err", "Save failed: "+err.Error())
+		return
+	}
+	u := userFromCtx(r)
+	s.store.Audit(u.Username, "settings.save", fmt.Sprintf("%d settings", len(updates)))
+	msg := "Settings saved — written to server.cfg and pushed live."
+	if warning != "" {
+		msg = "Saved, but: " + warning
+	}
+	redirectFlash(w, r, "/settings", "ok", msg)
+}
+
+// handleSettingsWarmup fires mp_warmup_start / mp_warmup_end live over RCON.
+// They are commands, not cvars: persisted in server.cfg they would re-fire on
+// every exec (warmup on every map change), so the settings save deliberately
+// has nothing to do with them.
+func (s *Server) handleSettingsWarmup(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	action := r.FormValue("action")
+	var cmd, what string
+	switch action {
+	case "start":
+		cmd, what = "mp_warmup_start", "Warmup started."
+	case "end":
+		cmd, what = "mp_warmup_end", "Warmup ended."
+	default:
+		redirectFlash(w, r, "/settings", "err", "Unknown warmup action.")
+		return
+	}
+	if _, err := s.agent.Exec(r.Context(), cmd); err != nil {
+		redirectFlash(w, r, "/settings", "err", "Could not run "+cmd+": "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "settings.warmup", action)
+	redirectFlash(w, r, "/settings", "ok", what)
+}
+
 // --- loadout -------------------------------------------------------------------
 
 // knifeCatalog is the WeaponPaints-compatible knife model list. Class names and

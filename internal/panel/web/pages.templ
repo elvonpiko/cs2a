@@ -1,5 +1,101 @@
 package web
 
+templ SettingsPage(nav *NavUser, toast *Toast, v SettingsView) {
+	<div class="page-head">
+		<h1>Settings</h1>
+		<p>Server rules as CS2 cvars. Saved to server.cfg (so they survive restarts) and pushed to the running server immediately.</p>
+	</div>
+
+	if toast != nil && toast.Message != "" {
+		if toast.Kind == "ok" {
+			<div class="notice" id="flash">{ toast.Message }</div>
+		} else {
+			<div class="error-box" id="flash">{ toast.Message }</div>
+		}
+	}
+	if v.CFGWarning != "" {
+		<div class="error-box">{ v.CFGWarning }</div>
+	}
+
+	if v.AgentDown {
+		<div class="card">
+			<h2>Settings unavailable</h2>
+			<p class="sub">The agent could not read the current server.cfg</p>
+			<p class="hint">Saving without knowing what is already there could overwrite it — cs2a refuses. Check the agent is running, then reload this page.</p>
+		</div>
+	} else {
+		<form method="post" action="/settings" class="grow">
+			for _, g := range v.Groups {
+				<div class="card section-gap">
+					<h2>{ g.Title }</h2>
+					<p class="sub">{ g.Blurb }</p>
+					for _, row := range g.Rows {
+						<label class="field">
+							<span>{ row.Label } <span class="mono faint">{ row.Name }</span></span>
+							switch row.Kind {
+								case "bool":
+									<select name={ "set_" + row.Name }>
+										<option value="0" selected?={ !row.HasValue || row.Value == "0" }>off</option>
+										<option value="1" selected?={ row.HasValue && row.Value == "1" }>on</option>
+									</select>
+								case "select":
+									<select name={ "set_" + row.Name }>
+										for _, o := range row.Options {
+											<option value={ o.Value } selected?={ row.HasValue && row.Value == o.Value }>{ o.Label }</option>
+										}
+									</select>
+								case "int":
+									if row.HasValue {
+										<input type="number" name={ "set_" + row.Name } value={ row.Value } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="1"/>
+									} else {
+										<input type="number" name={ "set_" + row.Name } placeholder="not set (engine default)" min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="1"/>
+									}
+								case "float":
+									if row.HasValue {
+										<input type="number" name={ "set_" + row.Name } value={ row.Value } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="any"/>
+									} else {
+										<input type="number" name={ "set_" + row.Name } placeholder="not set (engine default)" min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="any"/>
+									}
+								default:
+									if row.HasValue {
+										<input type="text" name={ "set_" + row.Name } value={ row.Value }/>
+									} else {
+										<input type="text" name={ "set_" + row.Name } placeholder="not set (engine default)"/>
+									}
+							}
+							<p class="hint">{ row.Hint }</p>
+						</label>
+					}
+				</div>
+			}
+			<div class="btn-row section-gap sticky-actions">
+				<button class="btn primary" type="submit">Save settings</button>
+				<a class="btn ghost" href="/settings">Reset</a>
+			</div>
+		</form>
+		// sv_password lives on the Access page (it is access control, and its
+		// save path reloads the map so enforcement is immediate). Warmup
+		// start/end are commands, not cvars — buttons, not fields.
+		<div class="card section-gap">
+			<h2>Warmup right now</h2>
+			<p class="sub">mp_warmup_start / mp_warmup_end are commands, not settings — a line in server.cfg would re-fire them on every exec</p>
+			<div class="btn-row">
+				<form method="post" action="/settings/warmup" class="mt0">
+					<input type="hidden" name="action" value="start"/>
+					<button class="btn ghost" type="submit" data-confirm="Start a warmup phase now?">Start warmup</button>
+				</form>
+				<form method="post" action="/settings/warmup" class="mt0">
+					<input type="hidden" name="action" value="end"/>
+					<button class="btn ghost" type="submit" data-confirm="End the warmup and start the match now?">End warmup</button>
+				</form>
+			</div>
+		</div>
+		if v.ExtraCount > 0 {
+			<p class="hint section-gap">{ fmtInt(v.ExtraCount) } other { plural(v.ExtraCount, "setting", "settings") } live in the managed block outside this catalog (advanced cvars, plugin config). Saving here keeps them untouched.</p>
+		}
+	}
+}
+
 templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 	<div class="page-head">
 		<h1>Access</h1>
@@ -252,10 +348,23 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 								</td>
 								<td class="right">
 									if u.ID != selfID {
-										<form method="post" action="/users/delete" class="mt0">
-											<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
-											<button class="btn danger sm" type="submit" data-confirm={ "Delete user " + u.Username + "? They lose access to the panel immediately." }>Delete</button>
-										</form>
+										<div class="btn-row">
+											// Promote/demote without the delete-recreate dance. A
+											// player becomes an admin in one click; demoting the
+											// last admin is refused server-side.
+											<form method="post" action="/users/role" class="mt0">
+												<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
+												if u.Role == "admin" {
+													<button class="btn ghost sm" type="submit" data-confirm={ "Demote " + u.Username + " to player?" }>Demote</button>
+												} else {
+													<button class="btn ghost sm" type="submit" data-confirm={ "Promote " + u.Username + " to admin? They get full control of the server." }>Promote</button>
+												}
+											</form>
+											<form method="post" action="/users/delete" class="mt0">
+												<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
+												<button class="btn danger sm" type="submit" data-confirm={ "Delete user " + u.Username + "? They lose access to the panel immediately." }>Delete</button>
+											</form>
+										</div>
 									}
 								</td>
 							</tr>

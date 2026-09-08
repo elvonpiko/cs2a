@@ -211,6 +211,32 @@ func (s *Store) SetUserPassword(id int64, hash string) error {
 	return err
 }
 
+// SetUserRole changes a user's role. Demoting the last admin would lock
+// everyone out of admin-only pages, so it is refused here — the panel has no
+// recovery path for a zero-admin install short of the setup token.
+func (s *Store) SetUserRole(id int64, role string) error {
+	if role != "admin" && role != "player" {
+		return fmt.Errorf("panel: bad role %q", role)
+	}
+	if role == "player" {
+		var admins int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin' AND id != ?`, id).Scan(&admins); err != nil {
+			return err
+		}
+		if admins == 0 {
+			return fmt.Errorf("panel: demote would leave no admins")
+		}
+	}
+	res, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // DeleteUser removes a user (sessions cascade).
 func (s *Store) DeleteUser(id int64) error {
 	res, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)

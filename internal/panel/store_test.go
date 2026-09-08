@@ -187,3 +187,29 @@ func TestOpenStoreNested(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Demoting the only admin would lock the install out of every admin page;
+// the store must refuse it no matter what the handler did.
+func TestSetUserRoleRefusesLastAdmin(t *testing.T) {
+	store := openTestStore(t)
+	hash, _ := HashPassword("password12345")
+	a, _ := store.CreateUser("solo", hash, "admin", "")
+	p, _ := store.CreateUser("bob", hash, "player", "")
+
+	// promote works
+	if err := store.SetUserRole(p.ID, "admin"); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	// demote when another admin exists works
+	if err := store.SetUserRole(p.ID, "player"); err != nil {
+		t.Fatalf("demote with another admin: %v", err)
+	}
+	// demoting the last admin is refused
+	if err := store.SetUserRole(a.ID, "player"); err == nil {
+		t.Fatal("last admin demote must be refused")
+	}
+	// and a bad role is rejected
+	if err := store.SetUserRole(a.ID, "root"); err == nil {
+		t.Fatal("bad role must be refused")
+	}
+}

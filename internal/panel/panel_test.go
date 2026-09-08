@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,16 @@ type fakeAgent struct {
 	whitelist  []string
 	wlEnabled  bool
 	installs   int
-	loadout    map[string][2]string
+	// passwordInit marks "a password save has happened", so the settings
+	// stub can serve the saved value (or its absence) instead of the fixture.
+	passwordInit bool
+	// putSettings captures the last settings PUT (name -> value) and its order.
+	putSettings []Setting
+	// settingsBody overrides the canned GET /api/v1/settings when set.
+	settingsBody string
+	// execs captures console commands the panel asked the agent to run.
+	execs   []string
+	loadout map[string][2]string
 	// loadoutSkins captures the skins_t/skins_ct maps of the last save.
 	loadoutSkins [2]map[string]string
 	plugins      string
@@ -132,6 +142,13 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if !check(w, r) {
 			return
 		}
+		var req struct {
+			Command string `json:"command"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.execs = append(f.execs, req.Command)
+		f.mu.Unlock()
 		w.Write([]byte(`{"ok":true,"output":""}`))
 	})
 	mux.HandleFunc("PUT /api/v1/password", func(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +160,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.password = req.Password
+		f.passwordInit = true
 		w.Write([]byte(`{"ok":true,"locked_now":true}`))
 	})
 	mux.HandleFunc("PUT /api/v1/whitelist", func(w http.ResponseWriter, r *http.Request) {
@@ -241,11 +259,43 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		}
 		w.Write([]byte(`{"ok":true}`))
 	})
+	mux.HandleFunc("PUT /api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		var req struct {
+			Settings []Setting `json:"settings"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.putSettings = req.Settings
+		f.mu.Unlock()
+		w.Write([]byte(`{"ok":true}`))
+	})
 	mux.HandleFunc("GET /api/v1/settings", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
 			return
 		}
-		w.Write([]byte(`{"settings":[{"name":"sv_password","value":"hunter2"},{"name":"sv_cheats","value":"0"}]}`))
+		// sv_password reflects what the password form last wrote, so pages
+		// and tests see the state they just set (it starts protected).
+		f.mu.Lock()
+		pw := f.password
+		override := f.settingsBody
+		f.mu.Unlock()
+		if override != "" {
+			w.Write([]byte(override))
+			return
+		}
+		if pw == "" && f.passwordInit {
+			pw = ""
+		} else if pw == "" && !f.passwordInit {
+			pw = "hunter2"
+		}
+		body, _ := json.Marshal(map[string]any{"settings": []map[string]any{
+			{"name": "sv_password", "value": pw},
+			{"name": "sv_cheats", "value": "0"},
+		}})
+		w.Write(body)
 	})
 	mux.HandleFunc("PUT /api/v1/loadout/", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -308,6 +358,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 
 const fakeStatusRunning = `{
 	"service": {"active": true, "enabled": true, "uptime_seconds": 90061},
+	"connect_addr": "31.171.101.123:27015",
 	"info": {"name": "cs2a test server", "map": "de_dust2", "players": 2, "max": 12, "bots": 1},
 	"rcon": {"hostname": "cs2a test server", "map": "de_dust2", "humans": 2, "bots": 1, "max": 12,
 		"players": [
@@ -1506,5 +1557,297 @@ func TestAccessPageNeverEchoesPassword(t *testing.T) {
 	}
 	if strings.Contains(flash, "s3cret") {
 		t.Fatal("the flash must not repeat the new password")
+	}
+}
+
+// The Connection card must offer the connect address with a copy button for
+// every role — players paste it into the game console, admins hand it to
+// friends. The address comes from the agent's config (the installer's
+// detected public IP), not from any query the running server could answer.
+func TestServerPageShowsConnectAddress(t *testing.T) {
+	for _, tc := range []struct{ name, role string }{
+		{"admin", "admin"}, {"player", "player"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _, base := newPanelTest(t)
+			_ = get(t, client, base+"/setup")
+			if tc.role == "admin" {
+				_ = postForm(t, client, base+"/setup", url.Values{
+					"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+					"steamid": {"76561197961500295"},
+				})
+				loginAs(t, client, base, "admin", "password123")
+			} else {
+				_ = postForm(t, client, base+"/setup", url.Values{
+					"token": {"setuptok"}, "username": {"owner"}, "password": {"password123"},
+				})
+				loginAs(t, client, base, "owner", "password123")
+			}
+			body := getBody(t, client, base+"/")
+			for _, want := range []string{
+				`id="connect-addr"`,
+				`data-copy="31.171.101.123:27015"`,
+				"connect 31.171.101.123:27015",
+			} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("server page missing %q:\n%s", want, body[:min(1500, len(body))])
+				}
+			}
+		})
+	}
+}
+
+// The Access page must state the effective access model: password and
+// whitelist are independent layers, panel users grant nothing in-game, and
+// "friends reconnect without typing the password" (clients cache it) is the
+// answer to the most confusing report cs2a got. The strip adapts to the
+// live combination.
+func TestAccessPageExplainsAccessModel(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// password set (settings stub) + whitelist enforced
+	fa.mu.Lock()
+	fa.wlEnabled = true
+	fa.mu.Unlock()
+	body := getBody(t, client, base+"/access")
+	for _, want := range []string{
+		"Who can join right now",
+		"Whitelist + password",
+		"clients cache it",
+		"never grant or bypass in-game access",
+	} {
+		if !strings.Contains(strings.ToLower(body), strings.ToLower(want)) {
+			t.Fatalf("access page missing %q:\n%s", want, body[:min(1800, len(body))])
+		}
+	}
+
+	// password cleared → whitelist-only wording
+	_ = postForm(t, client, base+"/access/password", url.Values{"password": {""}})
+	body = getBody(t, client, base+"/access")
+	if !strings.Contains(body, "Whitelist only") {
+		t.Fatal("whitelist-only mode must be named after clearing the password")
+	}
+
+	// whitelist off too → open to everyone
+	fa.mu.Lock()
+	fa.wlEnabled = false
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/access")
+	if !strings.Contains(body, "Open to everyone") {
+		t.Fatal("open mode must be named when both layers are off")
+	}
+}
+
+// Promoting a player to admin (and demoting back) must work from the users
+// page without the delete-and-recreate dance — but never on yourself, and the
+// last admin must be undemotable or the install locks itself out.
+func TestUserRoleChanges(t *testing.T) {
+	client, _, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// create a player
+	_ = postForm(t, client, base+"/users/create", url.Values{
+		"username": {"bob"}, "password": {"password12345"}, "role": {"player"},
+	})
+	// find bob's id from the page (the table renders it in the form)
+	body := getBody(t, client, base+"/users")
+	idm := regexp.MustCompile(`name="user_id" value="(\d+)"`).FindAllStringSubmatch(body, -1)
+	if len(idm) < 2 {
+		t.Fatalf("expected two user rows with ids, got %d:\n%s", len(idm), body[:min(1200, len(body))])
+	}
+	// ids are rendered in order; the first (setup admin) is self, the second is bob
+	bobID := idm[len(idm)-1][1]
+
+	// promote bob
+	resp := postForm(t, client, base+"/users/role", url.Values{"user_id": {bobID}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("promote: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "bob is now admin") {
+		t.Fatalf("promote flash missing:\n%s", flash[:min(1000, len(flash))])
+	}
+	body = getBody(t, client, base+"/users")
+	if !strings.Contains(body, ">Demote</button>") {
+		t.Fatal("bob must offer Demote after promotion")
+	}
+
+	// demote back
+	_ = postForm(t, client, base+"/users/role", url.Values{"user_id": {bobID}})
+	body = getBody(t, client, base+"/users")
+	if !strings.Contains(body, ">Promote</button>") {
+		t.Fatal("bob must offer Promote after demotion")
+	}
+
+	// self-change refused. The setup admin is id 1 — the page never renders a
+	// role form for your own row, so this exercises the handler guard, which
+	// is what stands between a crafted POST and an adminless install.
+	resp = postForm(t, client, base+"/users/role", url.Values{"user_id": {"1"}})
+	flash = getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "cannot change your own role") {
+		t.Fatalf("self-change must be refused:\n%s", flash[:min(800, len(flash))])
+	}
+}
+
+// --- settings page -----------------------------------------------------------
+
+func TestSettingsPageCatalogAndSave(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// Seed the managed block: sv_password (owned by Access), an advanced row
+	// outside the catalog, and two catalog cvars with values.
+	fa.mu.Lock()
+	fa.settingsBody = `{"settings":[
+		{"name":"sv_password","value":"hunter2"},
+		{"name":"sv_gravity","value":"800"},
+		{"name":"mp_freezetime","value":"6"},
+		{"name":"host_info_show","value":"1"}
+	]}`
+	fa.mu.Unlock()
+
+	body := getBody(t, client, base+"/settings")
+	for _, want := range []string{
+		"Game mode", "Warmup length (seconds)", "C4 timer (seconds)", "Friendly fire",
+		`name="set_mp_freezetime"`, `value="6"`, `name="set_sv_gravity" value="800"`,
+		"not set (engine default)", // a catalog cvar absent from the block
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("settings page missing %q:\n%s", want, body[:min(2200, len(body))])
+		}
+	}
+	// sv_password must NOT be a field here — Access owns it.
+	if strings.Contains(body, `name="set_sv_password"`) {
+		t.Fatal("sv_password must not be editable on the settings page")
+	}
+
+	// Save: mp_freezetime changes, sv_gravity stays, sv_cheats-style extras
+	// and sv_password survive untouched.
+	resp := postForm(t, client, base+"/settings", url.Values{
+		"set_mp_freezetime":            {"12"},
+		"set_mp_startmoney":            {"2000"},
+		"set_mp_friendlyfire":          {"1"},
+		"set_hostname":                 {"cs2a test box"},
+		"set_game_type":                {"0"},
+		"set_game_mode":                {"1"},
+		"set_sv_gravity":               {"800"},
+		"set_mp_roundtime":             {"5"},
+		"set_mp_maxrounds":             {"30"},
+		"set_mp_c4timer":               {"40"},
+		"set_mp_autoteambalance":       {"1"},
+		"set_mp_limitteams":            {"2"},
+		"set_mp_warmuptime":            {"60"},
+		"set_mp_buytime":               {"45"},
+		"set_mp_maxmoney":              {"16000"},
+		"set_mp_afterroundmoney":       {"0"},
+		"set_mp_round_restart_delay":   {"7"},
+		"set_mp_give_player_c4":        {"1"},
+		"set_sv_lan":                   {"0"},
+		"set_mp_damage_scale_ct_head":  {"1"},
+		"set_mp_damage_scale_ct_body":  {"1"},
+		"set_mp_damage_scale_t_head":   {"1"},
+		"set_mp_damage_scale_t_body":   {"1"},
+		"set_mp_warmuptime_pausetimer": {"0"},
+		"set_mp_warmup_pausetimer":     {"0"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("save: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "Settings saved") {
+		t.Fatalf("save flash missing:\n%s", flash[:min(1200, len(flash))])
+	}
+
+	fa.mu.Lock()
+	saved := fa.putSettings
+	fa.mu.Unlock()
+	got := map[string]string{}
+	for _, s := range saved {
+		got[s.Name] = s.Value
+	}
+	// changed value
+	if got["mp_freezetime"] != "12" {
+		t.Fatalf("mp_freezetime = %q", got["mp_freezetime"])
+	}
+	// new value
+	if got["mp_startmoney"] != "2000" {
+		t.Fatalf("mp_startmoney = %q", got["mp_startmoney"])
+	}
+	// preserved non-catalog row
+	if got["host_info_show"] != "1" {
+		t.Fatalf("non-catalog row dropped: %v", got)
+	}
+	// sv_password preserved for the Access page
+	if got["sv_password"] != "hunter2" {
+		t.Fatalf("sv_password must survive a settings save: %v", got)
+	}
+	// every catalog row was sent (the form posts all fields)
+	if n := len(saved); n < 27 {
+		t.Fatalf("expected the whole catalog posted, got %d rows", n)
+	}
+}
+
+func TestSettingsValidationRejectsBadValues(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	for _, tc := range []struct{ field, value, want string }{
+		{"set_mp_freezetime", "thirty", "must be a whole number"},
+		{"set_mp_freezetime", "999", "must be between"},
+		{"set_sv_gravity", "1e99", "must be between"},
+		{"set_mp_friendlyfire", "yes", "must be 0 or 1"},
+		{"set_game_mode", "7", "not one of the allowed values"},
+		{"set_hostname", "a\"b", "not allowed"},
+	} {
+		resp := postForm(t, client, base+"/settings", url.Values{tc.field: {tc.value}})
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s=%s: %d", tc.field, tc.value, resp.StatusCode)
+		}
+		flash := getBody(t, client, base+resp.Header.Get("Location"))
+		if !strings.Contains(flash, tc.want) {
+			t.Fatalf("%s=%s: flash %q missing %q", tc.field, tc.value, flash[:min(400, len(flash))], tc.want)
+		}
+	}
+	// nothing may have been written by a rejected batch
+	fa.mu.Lock()
+	n := len(fa.putSettings)
+	fa.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a rejected save reached the agent: %d rows", n)
+	}
+}
+
+func TestSettingsWarmupButtons(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	_ = postForm(t, client, base+"/settings/warmup", url.Values{"action": {"start"}})
+	_ = postForm(t, client, base+"/settings/warmup", url.Values{"action": {"end"}})
+	fa.mu.Lock()
+	execs := append([]string(nil), fa.execs...)
+	fa.mu.Unlock()
+	if len(execs) != 2 || execs[0] != "mp_warmup_start" || execs[1] != "mp_warmup_end" {
+		t.Fatalf("warmup execs = %v", execs)
 	}
 }
