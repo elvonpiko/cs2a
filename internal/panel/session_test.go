@@ -163,8 +163,20 @@ func TestLogoutInvalidatesTheSessionServerSide(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("a replayed token after logout returned %d, want a redirect to /login", resp.StatusCode)
 	}
-	if loc := resp.Header.Get("Location"); loc != "/login" {
+	// The redirect now carries a flash explaining the sudden login page, and
+	// the dead cookie is cleared so the browser stops replaying the token.
+	loc := resp.Header.Get("Location")
+	if !strings.HasPrefix(loc, "/login") {
 		t.Fatalf("Location = %q", loc)
+	}
+	clearedNow := false
+	for _, c := range resp.Cookies() {
+		if c != nil && c.Name == sessionCookie && c.Value == "" && c.MaxAge < 0 {
+			clearedNow = true
+		}
+	}
+	if !clearedNow {
+		t.Fatal("the dead session cookie must be cleared in the same response")
 	}
 }
 
@@ -308,5 +320,95 @@ func TestSetupIsClosedAfterTheFirstAdmin(t *testing.T) {
 	}
 	if !strings.Contains(body, "Wrong username or password") {
 		t.Fatalf("login body = %q", body)
+	}
+}
+
+// --- sliding sessions ------------------------------------------------------
+//
+// A login used to live for a fixed seven days no matter what: close the
+// browser, come back days later, and the tab still worked. Sessions now die
+// after SessionIdle without a request, with SessionMaxAge as the hard cap,
+// and an authenticated request refreshes the idle window (at most once per
+// SessionTouch, so a polling page is not a write per poll).
+
+func TestSessionIdleWindow(t *testing.T) {
+	store := newSessionTestStore(t)
+	hash, _ := HashPassword("correct-horse")
+	u, _ := store.CreateUser("admin", hash, "admin", "")
+
+	// a fresh session works
+	tok := HashToken("fresh")
+	_, _ = store.CreateSession(tok, u.ID, SessionTTL)
+	if got, _ := store.GetSessionUser(tok); got == nil {
+		t.Fatal("fresh session rejected")
+	}
+
+	// last_seen older than the idle window: rejected even though the absolute
+	// expiry is days away
+	stale := HashToken("stale")
+	_, _ = store.CreateSession(stale, u.ID, SessionTTL)
+	old := time.Now().UTC().Add(-(SessionIdle + time.Minute)).Format(time.RFC3339)
+	if _, err := store.db.Exec(`UPDATE sessions SET last_seen = ? WHERE token_hash = ?`, old, stale); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetSessionUser(stale); got != nil {
+		t.Fatal("an idle-expired session authenticated")
+	}
+
+	// and the sweeper drops the idle-dead row
+	if err := store.DeleteExpiredSessions(); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE token_hash = ?`, stale).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("idle-dead session survived the sweep: n=%d err=%v", n, err)
+	}
+}
+
+func TestSessionTouchRefreshesIdleWindow(t *testing.T) {
+	store := newSessionTestStore(t)
+	hash, _ := HashPassword("correct-horse")
+	u, _ := store.CreateUser("admin", hash, "admin", "")
+	tok := HashToken("touched")
+	_, _ = store.CreateSession(tok, u.ID, SessionTTL)
+
+	// last_seen just inside the idle window but older than SessionTouch: the
+	// lookup must succeed AND refresh the row (and report the touch).
+	ago := time.Now().UTC().Add(-(SessionTouch + time.Minute)).Format(time.RFC3339)
+	if _, err := store.db.Exec(`UPDATE sessions SET last_seen = ? WHERE token_hash = ?`, ago, tok); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetSessionUser(tok); got == nil {
+		t.Fatal("session inside the idle window was rejected")
+	}
+	if !store.SessionTouched(tok) {
+		t.Fatal("lookup older than SessionTouch must report a touch")
+	}
+	if store.SessionTouched(tok) {
+		t.Fatal("touch flag must clear once consumed")
+	}
+	// the row's last_seen moved: a second lookup is now a no-touch fast path
+	if got, _ := store.GetSessionUser(tok); got == nil {
+		t.Fatal("touched session rejected")
+	}
+	if store.SessionTouched(tok) {
+		t.Fatal("a fresh last_seen must not touch again")
+	}
+}
+
+func TestSessionAbsoluteCapBeatsActivity(t *testing.T) {
+	store := newSessionTestStore(t)
+	hash, _ := HashPassword("correct-horse")
+	u, _ := store.CreateUser("admin", hash, "admin", "")
+	tok := HashToken("ancient")
+	_, _ = store.CreateSession(tok, u.ID, SessionTTL)
+	// active recently (last_seen now) but created before the absolute cap:
+	// expired_at is what CreateSession sets from ttl, so rewind it directly.
+	ancient := time.Now().UTC().Add(-(SessionMaxAge + time.Hour)).Format(time.RFC3339)
+	if _, err := store.db.Exec(`UPDATE sessions SET expires_at = ? WHERE token_hash = ?`, ancient, tok); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := store.GetSessionUser(tok); got != nil {
+		t.Fatal("a session past its absolute cap authenticated despite activity")
 	}
 }

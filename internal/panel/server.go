@@ -169,10 +169,29 @@ func (s *Server) requireRole(next http.HandlerFunc, roles ...string) http.Handle
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		u, err := s.store.GetSessionUser(HashToken(cookie.Value))
+		tok := HashToken(cookie.Value)
+		u, err := s.store.GetSessionUser(tok)
 		if err != nil || u == nil {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			// The session row is gone, idle-dead or past its absolute cap:
+			// drop the cookie so the browser stops sending it, and say why
+			// the user suddenly landed on the login page.
+			http.SetCookie(w, &http.Cookie{
+				Name: sessionCookie, Value: "", Path: "/",
+				HttpOnly: true, Secure: s.cfg.SecureCookies(),
+				SameSite: http.SameSiteLaxMode, MaxAge: -1,
+			})
+			redirectFlash(w, r, "/login", "err", "Your session expired — sign in again.")
 			return
+		}
+		// Touch: GetSessionUser refreshed last_seen when it was due; mirror
+		// that in the cookie so a long-lived tab keeps working seamlessly.
+		if s.store.SessionTouched(tok) {
+			http.SetCookie(w, &http.Cookie{
+				Name: sessionCookie, Value: cookie.Value, Path: "/",
+				HttpOnly: true, Secure: s.cfg.SecureCookies(),
+				SameSite: http.SameSiteLaxMode,
+				MaxAge:   int(SessionIdle.Seconds()),
+			})
 		}
 		allowed := false
 		for _, role := range roles {
@@ -294,7 +313,9 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   s.cfg.SecureCookies(),
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(SessionTTL.Seconds()),
+		// The cookie may only outlive the server-side idle window, never the
+		// absolute cap; requireRole re-issues the cookie on touch.
+		MaxAge: int(SessionIdle.Seconds()),
 	})
 	s.store.Audit(u.Username, "auth.login", "")
 	http.Redirect(w, r, "/", http.StatusSeeOther)

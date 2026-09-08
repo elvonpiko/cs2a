@@ -11,8 +11,27 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// SessionTTL is how long a login session lasts.
-const SessionTTL = 7 * 24 * time.Hour
+// Session lifetimes. Two clocks, because "still logged in the next morning"
+// and "logged in forever" are different complaints:
+//
+//   - SessionIdle is the sliding window: go this long without a request and
+//     the session dies. Closing the browser and coming back hours later hits
+//     this. Each authenticated request that is at least SessionTouch old
+//     refreshes the cookie and the row, so an admin working all day is never
+//     interrupted (htmx polling counts as activity, and only one UPDATE per
+//     few minutes, not one per poll).
+//   - SessionMaxAge is the absolute cap from login, however active the user.
+const (
+	SessionIdle   = 12 * time.Hour
+	SessionMaxAge = 7 * 24 * time.Hour
+	// SessionTouch is how long a request may reuse the stored last-seen time
+	// before the row is refreshed again. It exists to keep the write rate off
+	// the hot path; it is a constant, not a knob.
+	SessionTouch = 5 * time.Minute
+)
+
+// SessionTTL is how long a login session lasts (the absolute cap).
+const SessionTTL = SessionMaxAge
 
 // HashPassword hashes with bcrypt (cost 10 is plenty for a small panel).
 func HashPassword(pw string) (string, error) {

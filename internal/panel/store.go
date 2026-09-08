@@ -17,6 +17,11 @@ import (
 // Store is the panel's persistent state.
 type Store struct {
 	db *sql.DB
+	// touched records sessions whose sliding window was just refreshed, so
+	// the middleware can re-issue the matching cookie once, in the same
+	// response that refreshed the row. It is a flag, not a timestamp: the
+	// decision was already made inside GetSessionUser.
+	touched map[string]bool
 }
 
 // User is a panel account. Roles: "admin" | "player".
@@ -58,7 +63,7 @@ func OpenStore(path string) (*Store, error) {
 			return nil, fmt.Errorf("panel: pragma: %w", err)
 		}
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, touched: map[string]bool{}}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -110,7 +115,37 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("panel: migrate: %w", err)
 		}
 	}
+	// Sliding sessions need last_seen; deployments from before it have a
+	// sessions table without the column. SQLite has no ADD COLUMN IF NOT
+	// EXISTS, so check pragma table_info first.
+	if !s.columnExists("sessions", "last_seen") {
+		if _, err := s.db.Exec(`ALTER TABLE sessions ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("panel: migrate sessions.last_seen: %w", err)
+		}
+	}
 	return nil
+}
+
+// columnExists reports whether a table has a column.
+func (s *Store) columnExists(table, column string) bool {
+	rows, err := s.db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 // Close closes the database.
@@ -206,11 +241,13 @@ func scanUser(scan func(dest ...any) error) (*User, error) {
 // --- sessions -----------------------------------------------------------
 
 // CreateSession stores a new session for a user (token given hashed).
+// last_seen starts at creation, so the idle clock begins the moment the
+// browser is closed, not at the first later request.
 func (s *Store) CreateSession(tokenHash string, userID int64, ttl time.Duration) (*Session, error) {
 	now := time.Now().UTC()
 	exp := now.Add(ttl)
-	_, err := s.db.Exec(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at)
-		VALUES (?, ?, ?, ?)`, tokenHash, userID, exp.Format(time.RFC3339), now.Format(time.RFC3339))
+	_, err := s.db.Exec(`INSERT INTO sessions (token_hash, user_id, expires_at, created_at, last_seen)
+		VALUES (?, ?, ?, ?, ?)`, tokenHash, userID, exp.Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return nil, err
 	}
@@ -218,11 +255,52 @@ func (s *Store) CreateSession(tokenHash string, userID int64, ttl time.Duration)
 }
 
 // GetSessionUser resolves a session token to its user, if valid.
+//
+// Two expiry clocks run at once: the absolute cap (expires_at, set at login)
+// and the sliding idle window (last_seen + SessionIdle). A row is valid only
+// inside both. This query returning nothing is the signal for "expired" — the
+// caller cannot distinguish idle from absolute, which is fine: the login page
+// explains the rule rather than the reason.
 func (s *Store) GetSessionUser(tokenHash string) (*User, error) {
-	row := s.db.QueryRow(`SELECT u.id, u.username, u.password_hash, u.role, COALESCE(u.steamid64,''), u.created_at
+	now := time.Now().UTC()
+	nowS := now.Format(time.RFC3339)
+	idleBefore := now.Add(-SessionIdle).Format(time.RFC3339)
+	row := s.db.QueryRow(`SELECT u.id, u.username, u.password_hash, u.role, COALESCE(u.steamid64,''), u.created_at,
+			s.expires_at, COALESCE(s.last_seen, s.created_at)
 		FROM sessions s JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = ? AND s.expires_at > ?`, tokenHash, time.Now().UTC().Format(time.RFC3339))
-	return scanUser(row.Scan)
+		WHERE s.token_hash = ?
+		  AND s.expires_at > ?
+		  AND COALESCE(s.last_seen, s.created_at) > ?`,
+		tokenHash, nowS, idleBefore)
+	var exp, seen, created string
+	u := &User{}
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.SteamID64, &created, &exp, &seen)
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	if t, err := time.Parse(time.RFC3339, created); err == nil {
+		u.CreatedAt = t
+	}
+	// Sliding window: refresh last_seen (and the cookie's Max-Age with it) at
+	// most once per SessionTouch so a polling page is not a write per poll.
+	if t, err := time.Parse(time.RFC3339, seen); err == nil {
+		if now.Sub(t) >= SessionTouch {
+			_, _ = s.db.Exec(`UPDATE sessions SET last_seen = ? WHERE token_hash = ?`, nowS, tokenHash)
+			s.touched[tokenHash] = true
+		}
+	}
+	return u, nil
+}
+
+// SessionTouched reports whether the previous GetSessionUser call for this
+// token refreshed the sliding window (and clears the flag). The middleware
+// uses it to re-issue the cookie in the same response.
+func (s *Store) SessionTouched(tokenHash string) bool {
+	if !s.touched[tokenHash] {
+		return false
+	}
+	delete(s.touched, tokenHash)
+	return true
 }
 
 // DeleteSession removes a session (logout).
@@ -231,9 +309,14 @@ func (s *Store) DeleteSession(tokenHash string) error {
 	return err
 }
 
-// DeleteExpiredSessions garbage-collects old sessions.
+// DeleteExpiredSessions garbage-collects dead sessions: past the absolute cap,
+// or idle for longer than the sliding window (a browser closed days ago).
 func (s *Store) DeleteExpiredSessions() error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at <= ?`, time.Now().UTC().Format(time.RFC3339))
+	now := time.Now().UTC()
+	idleBefore := now.Add(-SessionIdle).Format(time.RFC3339)
+	_, err := s.db.Exec(`DELETE FROM sessions
+		WHERE expires_at <= ?
+		   OR COALESCE(last_seen, created_at) <= ?`, now.Format(time.RFC3339), idleBefore)
 	return err
 }
 
