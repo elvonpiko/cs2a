@@ -312,6 +312,28 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 							</label>
 						}
 					</div>
+
+					for _, w := range weaponSkinsFor(v.Weapons, "T") {
+						<h3 class="lo-cat">{ w.Name }</h3>
+						<div class="lo-row">
+							<label class={ "item-card", templ.KV("selected", skinPick(v.SkinT, w.DefindexLabel) == "") }>
+								<input type="radio" name={ w.NameT } value="" checked?={ skinPick(v.SkinT, w.DefindexLabel) == "" }/>
+								<span class="item-img placeholder">—</span>
+								<span class="item-name">Vanilla</span>
+							</label>
+							for _, sk := range w.Skins {
+								<label class={ "item-card", templ.KV("selected", skinPick(v.SkinT, w.DefindexLabel) == sk.Value) }>
+									<input type="radio" name={ w.NameT } value={ sk.Value } checked?={ skinPick(v.SkinT, w.DefindexLabel) == sk.Value }/>
+									if sk.Image != "" {
+										<img class="item-img" src={ sk.Image } alt={ sk.Label } loading="lazy"/>
+									} else {
+										<span class="item-img placeholder">—</span>
+									}
+									<span class="item-name">{ sk.Label }</span>
+								</label>
+							}
+						</div>
+					}
 				</div>
 
 				<!-- CT side -->
@@ -363,47 +385,30 @@ templ LoadoutPage(nav *NavUser, toast *Toast, v LoadoutView) {
 							</label>
 						}
 					</div>
+
+					for _, w := range weaponSkinsFor(v.Weapons, "CT") {
+						<h3 class="lo-cat">{ w.Name }</h3>
+						<div class="lo-row">
+							<label class={ "item-card", templ.KV("selected", skinPick(v.SkinCT, w.DefindexLabel) == "") }>
+								<input type="radio" name={ w.NameCT } value="" checked?={ skinPick(v.SkinCT, w.DefindexLabel) == "" }/>
+								<span class="item-img placeholder">—</span>
+								<span class="item-name">Vanilla</span>
+							</label>
+							for _, sk := range w.Skins {
+								<label class={ "item-card", templ.KV("selected", skinPick(v.SkinCT, w.DefindexLabel) == sk.Value) }>
+									<input type="radio" name={ w.NameCT } value={ sk.Value } checked?={ skinPick(v.SkinCT, w.DefindexLabel) == sk.Value }/>
+									if sk.Image != "" {
+										<img class="item-img" src={ sk.Image } alt={ sk.Label } loading="lazy"/>
+									} else {
+										<span class="item-img placeholder">—</span>
+									}
+									<span class="item-name">{ sk.Label }</span>
+								</label>
+							}
+						</div>
+					}
 				</div>
 			</div>
-
-			if len(v.Weapons) > 0 {
-				<div class="card section-gap">
-					<h2>Weapon skins</h2>
-					<p class="sub">
-						Pick a skin per weapon — the same list <span class="mono">!ws</span> changes, saved per team where a weapon is available on both.
-						Vanilla (no skin) is always the first option.
-					</p>
-					<div class="skin-table">
-						for _, w := range v.Weapons {
-							<div class="skin-row">
-								<span class="skin-weapon">{ w.Name }</span>
-								if w.Team == "T" || w.Team == "both" {
-									<label class="field">
-										<span>T side</span>
-										<select name={ w.NameT }>
-											<option value="" selected?={ skinPick(v.SkinT, w.DefindexLabel) == "" }>Vanilla</option>
-											for _, sk := range w.Skins {
-												<option value={ sk.Value } selected?={ skinPick(v.SkinT, w.DefindexLabel) == sk.Value }>{ sk.Label }</option>
-											}
-										</select>
-									</label>
-								}
-								if w.Team == "CT" || w.Team == "both" {
-									<label class="field">
-										<span>CT side</span>
-										<select name={ w.NameCT }>
-											<option value="" selected?={ skinPick(v.SkinCT, w.DefindexLabel) == "" }>Vanilla</option>
-											for _, sk := range w.Skins {
-												<option value={ sk.Value } selected?={ skinPick(v.SkinCT, w.DefindexLabel) == sk.Value }>{ sk.Label }</option>
-											}
-										</select>
-									</label>
-								}
-							</div>
-						}
-					</div>
-				</div>
-			}
 
 			<div class="btn-row section-gap">
 				<button class="btn primary" type="submit">Save loadout</button>

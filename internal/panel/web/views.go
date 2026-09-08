@@ -361,6 +361,19 @@ func skinPick(m map[string]string, defindex string) string {
 	return m[defindex]
 }
 
+// weaponSkinsFor returns the weapons a side can carry: team "T" and "both"
+// for the terrorist card, "CT" and "both" for the counter-terrorist one. A
+// T-only gun never renders a CT picker, and vice versa.
+func weaponSkinsFor(ws []WeaponOption, side string) []WeaponOption {
+	out := make([]WeaponOption, 0, len(ws))
+	for _, w := range ws {
+		if w.Team == side || w.Team == "both" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // labelPasswordCard names the input field without ever showing the value.
 func labelPasswordCard(current string) string {
 	if current == "" {

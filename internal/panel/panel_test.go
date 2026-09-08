@@ -285,7 +285,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 			"agents_ct": [{"model": "ctm_st6_variantj", "name": "SEAL"}],
 			"weapons": [
 				{"defindex": 7, "name": "AK-47", "team": "T",
-				 "skins": [{"paint": 421, "name": "Asiimov"}, {"paint": 180, "name": "Fire Serpent"}]},
+				 "skins": [{"paint": 421, "name": "Asiimov", "image": "https://x/y.png"}, {"paint": 180, "name": "Fire Serpent"}]},
 				{"defindex": 9, "name": "AWP", "team": "both",
 				 "skins": [{"paint": 344, "name": "Asiimov"}]}
 			],
@@ -1398,15 +1398,30 @@ func TestLoadoutWeaponSkins(t *testing.T) {
 	})
 	loginAs(t, client, base, "admin", "password123")
 
+	// The skins render as per-weapon image-card rows inside the side cards,
+	// the same item-card pattern as knives/gloves/agents: every weapon gets a
+	// heading, a Vanilla card first, then one card per paint with its image.
 	body := getBody(t, client, base+"/loadout")
-	for _, want := range []string{"Weapon skins", `name="skin_t[7]"`, `name="skin_ct[9]"`, "Asiimov", "Fire Serpent"} {
+	for _, want := range []string{
+		">AK-47<", ">AWP<",
+		`name="skin_t[7]"`, `name="skin_ct[9]"`,
+		"Asiimov", "Fire Serpent",
+		`<span class="item-name">Vanilla</span>`,
+		`src="https://x/y.png"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("loadout page missing %q:\n%s", want, body[:min(2500, len(body))])
 		}
 	}
-	// The AK is T-only: its CT select must not exist.
+	// The AK is T-only: no CT radios for it.
 	if strings.Contains(body, `name="skin_ct[7]"`) {
-		t.Fatal("T-only weapon must not render a CT select")
+		t.Fatal("T-only weapon must not render a CT picker")
+	}
+	// Selected paint (skin_t 7 = 421 from the seeded loadout... the fake
+	// agent's GET loadout seeds no skins, so nothing selected initially):
+	// the Vanilla card must carry the checked radio for an unpicked weapon.
+	if !strings.Contains(body, `name="skin_t[7]" value="" checked`) {
+		t.Fatal("an unpicked weapon's Vanilla card must be checked")
 	}
 
 	resp := postForm(t, client, base+"/loadout", url.Values{
