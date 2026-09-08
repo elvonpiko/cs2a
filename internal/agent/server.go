@@ -68,12 +68,16 @@ type FullStatus struct {
 	// Diag explains an unreachable RCON and what would fix it. Present only
 	// when the server is running but RCON did not answer.
 	Diag *RCONDiagnosis `json:"diag,omitempty"`
+	// ConnectAddr is the ip:port players type into the console. From agent
+	// config (the installer writes the machine's public address), not from
+	// queries: the game binds 0.0.0.0 and A2S cannot know the routable IP.
+	ConnectAddr string `json:"connect_addr,omitempty"`
 }
 
 // Status composes systemd + A2S + RCON state. Individual query failures are
 // reported in Note rather than failing the whole call.
 func (s *Server) Status(ctx context.Context) FullStatus {
-	var out FullStatus
+	out := FullStatus{ConnectAddr: s.cfg.ConnectAddr}
 	active, err := s.sysd.IsActive()
 	if err != nil {
 		out.Note = "systemd: " + err.Error()

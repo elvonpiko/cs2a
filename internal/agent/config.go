@@ -24,6 +24,10 @@ type Config struct {
 	PluginCache  string `json:"plugin_cache"`  // download cache dir
 	WPDsn        string `json:"wp_dsn"`        // optional WeaponPaints MySQL DSN (loadout sync)
 	GitHubToken  string `json:"github_token"`  // optional, raises the GitHub API rate limit
+	// ConnectAddr is the ip:port players type into the console ("connect …").
+	// Empty when the installer could not work out a public address; the panel
+	// then shows the panel host instead (it is at least reachable).
+	ConnectAddr string `json:"connect_addr"`
 	// MapEnvFile is the game unit's EnvironmentFile holding CS2A_MAP, the
 	// map the next server start launches. Panel map changes persist there so
 	// a restart does not fall back to the unit's built-in default.

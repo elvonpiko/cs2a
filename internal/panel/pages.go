@@ -51,6 +51,7 @@ func (s *Server) serverView(r *http.Request, u *User, polled bool) web.ServerVie
 	}
 	v.Online = st.Service.Active
 	v.ServiceSub = "systemd unit state: " + boolLabel(st.Service.Active)
+	v.ConnectAddr = st.ConnectAddr
 	// A crash-looping unit must not be rendered as "Running": is-active flips
 	// on and off every few seconds, which is exactly what the operator cannot
 	// diagnose from the page. The agent already zeroed Active and folded the

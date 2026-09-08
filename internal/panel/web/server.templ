@@ -56,6 +56,18 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 			<h2>Connection</h2>
 			<p class="sub">Give this to your friends</p>
 			<div class="grow">
+				if v.ConnectAddr != "" {
+					<label class="field">
+						<span>Connect address</span>
+						<div class="addr-row">
+							<code class="mono addr" id="connect-addr">{ v.ConnectAddr }</code>
+							<button class="btn ghost sm" type="button" data-copy={ v.ConnectAddr }>
+								<span data-copy-label>copy</span>
+							</button>
+						</div>
+					</label>
+					<p class="hint mt4">In the game console: <span class="mono">connect { v.ConnectAddr }</span> — the password (if any) is asked for there.</p>
+				}
 				<div class="kv"><span class="k">Server</span><span class="v mono">{ orDash(v.Hostname) }</span></div>
 				<div class="kv"><span class="k">Slots</span><span class="v">{ fmtInt(v.Players) } / { fmtInt(v.Max) }</span></div>
 				<div class="kv"><span class="k">Panel</span><span class="v mono">cs2a { v.PanelVersion }</span></div>

@@ -188,6 +188,9 @@ type ServerStatus struct {
 	} `json:"rcon,omitempty"`
 	Note string         `json:"note"`
 	Diag *RCONDiagnosis `json:"diag,omitempty"`
+	// ConnectAddr is the ip:port players connect with; empty when the machine
+	// has no known public address.
+	ConnectAddr string `json:"connect_addr,omitempty"`
 }
 
 // RCONDiagnosis mirrors the agent's RCON diagnosis.

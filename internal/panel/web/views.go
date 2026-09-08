@@ -113,9 +113,12 @@ func whitelistEnableWarning(count int) string {
 
 // ServerView is the view model for the server page (both roles).
 type ServerView struct {
-	Online       bool
-	ServiceSub   string
-	Hostname     string
+	Online     bool
+	ServiceSub string
+	Hostname   string
+	// ConnectAddr is the ip:port players use (agent config); empty means the
+	// installer never worked out a public address.
+	ConnectAddr  string
 	Map          string
 	Players      int
 	Max          int

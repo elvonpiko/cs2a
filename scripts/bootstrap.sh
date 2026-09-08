@@ -1150,6 +1150,18 @@ AGENT_JSON="{
   \"db_path\": $(json_str "$CS2A_ROOT/var/agent.db"),
   \"plugin_cache\": $(json_str "$CS2A_ROOT/cache/plugins"),
   \"map_env_file\": $(json_str "$CS2A_ROOT/etc/cs2a-map")"
+# connect address for the panel's copy button. Only written when a genuinely
+# routable address is known: falling back to the loopback bind would put
+# "127.0.0.1:27015" on a card players are meant to paste into their console.
+CS2A_CONNECT_ADDR=""
+case "${PUBLIC_IP:-}" in
+  ""|0.0.0.0|::) ;;
+  *) CS2A_CONNECT_ADDR="$PUBLIC_IP:$CS2A_GAME_PORT" ;;
+esac
+if [[ -n $CS2A_CONNECT_ADDR ]]; then
+  AGENT_JSON+=",
+  \"connect_addr\": \"$CS2A_CONNECT_ADDR\""
+fi
 [[ -n $WP_DSN ]] && AGENT_JSON+=",
   \"wp_dsn\": $(json_str "$WP_DSN")"
 AGENT_JSON+="

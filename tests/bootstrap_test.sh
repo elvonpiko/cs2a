@@ -111,6 +111,8 @@ check "rerun upgrades cs2a's own game unit" grep -q "upgraded cs2a's" scripts/bo
 # The map the panel last switched to must survive a restart: the unit reads it
 # from an EnvironmentFile the agent updates, instead of hardcoding de_dust2.
 check "unit launches the recorded map" grep -q 'EnvironmentFile=\$CS2A_ROOT/etc/cs2a-map' scripts/bootstrap.sh
+check "agent knows the public connect address" grep -q 'connect_addr' scripts/bootstrap.sh
+check "connect address is empty when no public ip is known" grep -q '""|0.0.0.0|::) ;;' scripts/bootstrap.sh
 check "unit expands CS2A_MAP on the launch line" grep -q '+map \${CS2A_MAP}' scripts/bootstrap.sh
 check "bootstrap creates the map env file" grep -q 'CS2A_MAP=de_dust2' scripts/bootstrap.sh
 check "agent config points at the map env file" grep -q 'map_env_file' scripts/bootstrap.sh

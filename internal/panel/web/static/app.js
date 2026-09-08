@@ -223,6 +223,47 @@
 		});
 	}
 
+	// --- copy buttons -----------------------------------------------------
+	// <button data-copy="value"> copies the value and flashes "copied".
+	// Delegated so buttons inside htmx-swapped regions work without rebinding.
+	function flashCopied(btn) {
+		var label = btn.querySelector("[data-copy-label]");
+		btn.dataset.copyDone = "1";
+		if (label) {
+			btn.dataset.copyPrev = label.textContent;
+			label.textContent = "copied";
+		}
+		setTimeout(function () {
+			delete btn.dataset.copyDone;
+			if (label && btn.dataset.copyPrev) {
+				label.textContent = btn.dataset.copyPrev;
+				delete btn.dataset.copyPrev;
+			}
+		}, 1400);
+	}
+	document.body.addEventListener("click", function (e) {
+		var btn = e.target.closest("[data-copy]");
+		if (!btn) return;
+		var val = btn.getAttribute("data-copy") || "";
+		if (navigator.clipboard && window.isSecureContext) {
+			navigator.clipboard.writeText(val).then(
+				function () { flashCopied(btn); },
+				function () {}
+			);
+			return;
+		}
+		// fallback for non-secure contexts (plain HTTP on a LAN)
+		var ta = document.createElement("textarea");
+		ta.value = val;
+		ta.setAttribute("readonly", "");
+		ta.style.position = "fixed";
+		ta.style.opacity = "0";
+		document.body.appendChild(ta);
+		ta.select();
+		try { document.execCommand("copy"); flashCopied(btn); } catch (err) {}
+		document.body.removeChild(ta);
+	});
+
 	// The very first render (full page load) never fires htmx:afterSwap, so the
 	// <pre> would sit at the top of the buffer showing the oldest lines until
 	// the first poll tick landed.
