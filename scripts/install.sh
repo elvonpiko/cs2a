@@ -10,7 +10,7 @@
 # and Homebrew use. You also get version pinning and clean arg passthrough.
 #
 # Pin a version (recommended for automation):
-#   curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo CS2A_VERSION=v0.3.1 bash
+#   curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo CS2A_VERSION=v0.3.2 bash
 #
 # Env overrides:
 #   CS2A_VERSION   tag/branch/commit to install from   (default: latest tag, fallback main)
