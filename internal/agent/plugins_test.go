@@ -784,3 +784,70 @@ func (tr ghDownTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	return http.DefaultTransport.RoundTrip(r)
 }
+
+// The operator-facing error when a prerequisite cannot be installed: the
+// chain is depth-first (WeaponPaints → cssharp → metamod), and the failure
+// must name the exact dependency that could not be installed with the root
+// cause — one clean sentence, not the old
+// "plugins: dependency cssharp: plugins: dependency metamod: plugins: …"
+// prefix tower. This is the message the plugins page shows when an install
+// job fails because a prerequisite was unreachable.
+func TestInstallErrorNamesTheFailingDependency(t *testing.T) {
+	_, gh := fakeGH(t)
+	cfg := testConfig(t)
+	store, _ := OpenStore(cfg.DBPath)
+	defer store.Close()
+
+	// Break the cssharp release lookup specifically: WeaponPaints needs it,
+	// cssharp needs metamod (which still resolves fine) — the middle of the
+	// chain is what a broken mirror or a deleted upstream release looks like.
+	broken := NewGHClient("")
+	broken.HTTP = gh.HTTP
+	broken.HTTP.Transport = &depBreaker{inner: gh.HTTP.Transport, repo: "roflmuffin/CounterStrikeSharp"}
+	in := NewInstaller(cfg, store, DefaultCatalog(), broken)
+
+	if err := os.MkdirAll(cfg.CFGDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.CSGODir(), "gameinfo.gi"), []byte("Game\tcsgo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := in.Install(context.Background(), "weaponpaints", false)
+	if err == nil {
+		t.Fatal("install must fail when a dependency's release cannot be resolved")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "CounterStrikeSharp") {
+		t.Fatalf("error must name the failing dependency, got: %s", msg)
+	}
+	if strings.Count(msg, "dependency") > 1 {
+		t.Fatalf("error must not stack dependency prefixes, got: %s", msg)
+	}
+
+	// Nothing half-installed: the plugin that asked for the broken dep must
+	// not be recorded, and its files must not exist.
+	if in.IsInstalled("weaponpaints") {
+		t.Fatal("a failed install must not record the plugin")
+	}
+	if fileExists(filepath.Join(cfg.CSGODir(), "addons/counterstrikesharp/plugins/WeaponPaints")) {
+		t.Fatal("a failed install must not leave the plugin extracted")
+	}
+}
+
+// depBreaker fails requests for one repo's latest release while passing
+// everything else through — one broken mirror in the dependency chain.
+type depBreaker struct {
+	inner http.RoundTripper
+	repo  string
+}
+
+func (d *depBreaker) RoundTrip(r *http.Request) (*http.Response, error) {
+	if strings.Contains(r.URL.Path, "/repos/"+d.repo+"/releases") {
+		return nil, errors.New("connection reset by peer")
+	}
+	if d.inner != nil {
+		return d.inner.RoundTrip(r)
+	}
+	return http.DefaultTransport.RoundTrip(r)
+}

@@ -328,7 +328,10 @@ func (s *Server) handleMapChange(w http.ResponseWriter, r *http.Request) {
 func (s *Server) pluginCatalogCards(w http.ResponseWriter, r *http.Request) []web.PluginCardView {
 	entries, err := s.agent.Plugins(r.Context())
 	if err != nil {
-		redirectFlash(w, r, "/", "err", "Agent unreachable: "+err.Error())
+		// The client's message already says the agent cannot be reached and
+		// how to check it — an "Agent unreachable: cannot reach the cs2a
+		// agent — …" line said the same thing twice.
+		redirectFlash(w, r, "/", "err", err.Error())
 		return nil
 	}
 	return pluginCardViews(entries)
@@ -405,19 +408,17 @@ func (s *Server) pluginJobViews(r *http.Request) []web.PluginJobView {
 // humanJobError strips the internal "plugins: …" prefixes the agent's error
 // chain accumulates. The user saw
 // "plugins: dependency cssharp: plugins: dependency metamod: plugins: metamod:
-// read pointer: Get …" — every prefix in that string was noise.
+// read pointer: Get …" — every prefix in that string was noise. They appear
+// mid-sentence too (a dependency failure wraps the inner install error, whose
+// own message starts with the package prefix), so every occurrence goes, not
+// just the leading ones.
 func humanJobError(msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" {
 		return ""
 	}
-	for {
-		trimmed := strings.TrimPrefix(msg, "plugins: ")
-		if trimmed == msg {
-			break
-		}
-		msg = strings.TrimSpace(trimmed)
-	}
+	msg = strings.ReplaceAll(msg, "plugins: ", "")
+	msg = strings.Join(strings.Fields(msg), " ") // collapse the double gaps left behind
 	return capitalize(msg)
 }
 
@@ -638,7 +639,7 @@ func (s *Server) handleAccessWhitelistAddUser(w http.ResponseWriter, r *http.Req
 	}
 	ids, err := s.agent.Whitelist(r.Context())
 	if err != nil {
-		redirectFlash(w, r, "/access", "err", "Agent unreachable: "+err.Error())
+		redirectFlash(w, r, "/access", "err", err.Error())
 		return
 	}
 	for _, id := range ids {

@@ -1099,6 +1099,34 @@ func TestPluginCardHidesUninstallWhenDependedOn(t *testing.T) {
 // When the last install finishes, the polled strip must also refresh the cards
 // out-of-band. Without it a freshly installed plugin kept saying "not installed"
 // (and hid its Configure link) until the operator reloaded the page by hand.
+// The plugin install failure the operator sees must be one clean sentence
+// that names the failing prerequisite — not the agent's internal package
+// prefixes stacked three deep. (The agent no longer produces the tower, but
+// the panel must clean up whatever it is handed, including older agents.)
+func TestHumanJobErrorStripsInternalPrefixes(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{
+			"CounterStrikeSharp is required first, and installing it failed: read pointer: connection reset",
+			"CounterStrikeSharp is required first, and installing it failed: read pointer: connection reset",
+		},
+		{
+			"plugins: dependency cssharp: plugins: dependency metamod: plugins: metamod: read pointer: Get \"https://x\"",
+			"Dependency cssharp: dependency metamod: metamod: read pointer: Get \"https://x\"",
+		},
+		{
+			"plugins: extract cssharp.zip: unexpected EOF",
+			"Extract cssharp.zip: unexpected EOF",
+		},
+	} {
+		if got := humanJobError(tc.in); got != tc.want {
+			t.Errorf("humanJobError(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if humanJobError("   ") != "" {
+		t.Error("a blank message must stay blank")
+	}
+}
+
 func TestPluginJobsPartialRefreshesCardsWhenIdle(t *testing.T) {
 	client, fa, base := newPanelTestWithJobs(t, `{"jobs":[{"id":"job1","kind":"install",
 		"target":"weaponpaints","label":"WeaponPaints","status":"done",
