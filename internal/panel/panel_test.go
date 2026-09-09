@@ -1688,6 +1688,20 @@ func TestUserRoleChanges(t *testing.T) {
 		t.Fatal("bob must offer Promote after demotion")
 	}
 
+	// The nav keeps the Loadout tab for admins: the tab is role-gated on the
+	// page itself (players and admins both link a SteamID), so hiding it from
+	// the admin nav made the page unreachable by link the moment someone was
+	// promoted — it looked like promotion broke the loadout feature.
+	for _, who := range []struct{ user, pass string }{{"admin", "password123"}, {"bob", "password12345"}} {
+		loginAs(t, client, base, who.user, who.pass)
+		body = getBody(t, client, base+"/")
+		if !strings.Contains(body, `href="/loadout"`) {
+			t.Fatalf("%s's nav has no Loadout tab", who.user)
+		}
+	}
+	// the checks below are the admin's again
+	loginAs(t, client, base, "admin", "password123")
+
 	// self-change refused. The setup admin is id 1 — the page never renders a
 	// role form for your own row, so this exercises the handler guard, which
 	// is what stands between a crafted POST and an adminless install.
