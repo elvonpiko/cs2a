@@ -1848,21 +1848,37 @@ func TestSettingsValidationRejectsBadValues(t *testing.T) {
 	}
 }
 
-func TestSettingsWarmupButtons(t *testing.T) {
-	client, fa, base := newPanelTest(t)
+// The warmup start/end buttons are gone from the settings page: the warmup
+// length is a setting, and the server runs its own warmup phase between maps —
+// two buttons that re-fired commands the server was already running were pure
+// repetition. The route must be gone too, so a stale tab's form post cannot
+// silently do nothing.
+func TestSettingsWarmupButtonsRemoved(t *testing.T) {
+	client, _, base := newPanelTest(t)
 	_ = get(t, client, base+"/setup")
 	_ = postForm(t, client, base+"/setup", url.Values{
 		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
 	})
 	loginAs(t, client, base, "admin", "password123")
 
-	_ = postForm(t, client, base+"/settings/warmup", url.Values{"action": {"start"}})
-	_ = postForm(t, client, base+"/settings/warmup", url.Values{"action": {"end"}})
-	fa.mu.Lock()
-	execs := append([]string(nil), fa.execs...)
-	fa.mu.Unlock()
-	if len(execs) != 2 || execs[0] != "mp_warmup_start" || execs[1] != "mp_warmup_end" {
-		t.Fatalf("warmup execs = %v", execs)
+	body := getBody(t, client, base+"/settings")
+	if strings.Contains(body, "/settings/warmup") {
+		t.Fatal("the settings page still posts to /settings/warmup")
+	}
+	if strings.Contains(body, "Warmup right now") {
+		t.Fatal("the warmup-buttons card is still on the settings page")
+	}
+	if !strings.Contains(body, "Warmup length (seconds)") {
+		t.Fatal("the warmup length field disappeared — only the buttons should be gone")
+	}
+
+	resp, err := client.PostForm(base+"/settings/warmup", url.Values{"action": {"start"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST /settings/warmup = %d, want 404", resp.StatusCode)
 	}
 }
 func TestSettingsPartialSaveOnFreshInstall(t *testing.T) {

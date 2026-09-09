@@ -943,31 +943,6 @@ func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request, overrides 
 	redirectFlash(w, r, "/settings", "ok", msg)
 }
 
-// handleSettingsWarmup fires mp_warmup_start / mp_warmup_end live over RCON.
-// They are commands, not cvars: persisted in server.cfg they would re-fire on
-// every exec (warmup on every map change), so the settings save deliberately
-// has nothing to do with them.
-func (s *Server) handleSettingsWarmup(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r)
-	action := r.FormValue("action")
-	var cmd, what string
-	switch action {
-	case "start":
-		cmd, what = "mp_warmup_start", "Warmup started."
-	case "end":
-		cmd, what = "mp_warmup_end", "Warmup ended."
-	default:
-		redirectFlash(w, r, "/settings", "err", "Unknown warmup action.")
-		return
-	}
-	if _, err := s.agent.Exec(r.Context(), cmd); err != nil {
-		redirectFlash(w, r, "/settings", "err", "Could not run "+cmd+": "+err.Error())
-		return
-	}
-	s.store.Audit(u.Username, "settings.warmup", action)
-	redirectFlash(w, r, "/settings", "ok", what)
-}
-
 // --- loadout -------------------------------------------------------------------
 
 // knifeCatalog is the WeaponPaints-compatible knife model list. Class names and
