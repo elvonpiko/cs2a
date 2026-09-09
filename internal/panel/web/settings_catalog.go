@@ -70,9 +70,11 @@ type SettingSpec struct {
 	// change applies live or needs a restart/map change.
 	Hint string
 	// Default is the standard competitive value (MR12) the field shows and
-	// saves when the operator has not set anything else. Empty only for
-	// cvars whose standard is "leave to the engine" (none today — every
-	// curated row has one, so a save never trips on a missing field).
+	// saves when the operator has not set anything else. Empty for the one
+	// cvar whose standard is "whatever the operator already has" (hostname:
+	// the engine default is "unnamed", and an operator may have set theirs
+	// in a plain server.cfg line cs2a cannot read) — an empty default means
+	// the row is written only when the operator actually fills the field.
 	Default string
 }
 
@@ -214,8 +216,15 @@ func SettingsCatalog() []SettingGroup {
 			Title: "Server",
 			Blurb: "How the server names itself and who can reach it.",
 			Rows: []SettingSpec{
-				{Name: "hostname", Label: "Server name", Kind: KindText, Min: 0, Max: 200, Default: "cs2a server",
-					Hint: "Shown in the server browser and to connected players — live immediately."},
+				// No Default here, deliberately: hostname has no CS2 standard
+				// (the engine default is literally "unnamed"), and an operator
+				// may have set theirs as a plain server.cfg line cs2a cannot
+				// see. Writing a default into the managed block would silently
+				// rename their server on the next save. Empty stays empty: an
+				// unset hostname is never written, and whatever the file says
+				// outside the block keeps working.
+				{Name: "hostname", Label: "Server name", Kind: KindText, Min: 0, Max: 200,
+					Hint: "Shown in the server browser and to connected players — live immediately. Leave empty to keep whatever server.cfg already sets."},
 				{Name: "sv_lan", Label: "LAN only", Kind: KindBool, Default: "0",
 					Hint: "Only local clients can connect. The internet cannot reach the server while set — needs a restart to take effect."},
 			},
