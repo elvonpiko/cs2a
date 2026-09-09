@@ -1737,7 +1737,7 @@ func TestSettingsPageCatalogAndSave(t *testing.T) {
 	for _, want := range []string{
 		"Game mode", "Warmup length (seconds)", "C4 timer (seconds)", "Friendly fire",
 		`name="set_mp_freezetime"`, `value="6"`, `name="set_sv_gravity" value="800"`,
-		"not set (engine default)", // a catalog cvar absent from the block
+		`name="set_mp_maxrounds" value="24"`, // absent from the block: the standard default
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("settings page missing %q:\n%s", want, body[:min(2200, len(body))])
@@ -1863,5 +1863,123 @@ func TestSettingsWarmupButtons(t *testing.T) {
 	fa.mu.Unlock()
 	if len(execs) != 2 || execs[0] != "mp_warmup_start" || execs[1] != "mp_warmup_end" {
 		t.Fatalf("warmup execs = %v", execs)
+	}
+}
+func TestSettingsPartialSaveOnFreshInstall(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// No managed block at all — the freshest install there is.
+	body := getBody(t, client, base+"/settings")
+	for _, want := range []string{
+		`name="set_mp_freezetime" value="15"`,
+		`name="set_mp_maxrounds" value="24"`,
+		`name="set_mp_startmoney" value="800"`,
+		`name="set_mp_c4timer" value="40"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("fresh settings page missing default %q:\n%s", want, body[:min(2000, len(body))])
+		}
+	}
+
+	// Change exactly one field and save. Nothing else was touched, yet this
+	// must succeed on the first try.
+	resp := postForm(t, client, base+"/settings", url.Values{
+		"set_mp_freezetime": {"20"},
+	})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("partial save: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "Settings saved") {
+		t.Fatalf("partial save flash:\n%s", flash[:min(1000, len(flash))])
+	}
+
+	fa.mu.Lock()
+	saved := fa.putSettings
+	fa.mu.Unlock()
+	got := map[string]string{}
+	for _, s := range saved {
+		got[s.Name] = s.Value
+	}
+	// The one field the admin set…
+	if got["mp_freezetime"] != "20" {
+		t.Fatalf("mp_freezetime = %q", got["mp_freezetime"])
+	}
+	// …and every other catalog row at its standard default — a full, valid
+	// server.cfg block from a one-field edit.
+	for name, want := range map[string]string{
+		"mp_maxrounds":    "24",
+		"mp_startmoney":   "800",
+		"mp_maxmoney":     "16000",
+		"mp_c4timer":      "40",
+		"mp_warmuptime":   "60",
+		"mp_friendlyfire": "1",
+	} {
+		if got[name] != want {
+			t.Fatalf("%s = %q, want default %q", name, got[name], want)
+		}
+	}
+}
+
+// "Reset to defaults" must write the full standard competitive set — the
+// values a player meets in Premier — over whatever the operator had saved,
+// while preserving rows the settings page does not own.
+func TestSettingsResetToDefaults(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// Operator drift: everything set to values that are not standard, plus
+	// the two rows that must survive a reset untouched.
+	fa.mu.Lock()
+	fa.settingsBody = `{"settings":[
+		{"name":"sv_password","value":"hunter2"},
+		{"name":"mp_maxrounds","value":"99"},
+		{"name":"mp_freezetime","value":"1"},
+		{"name":"mp_startmoney","value":"60000"},
+		{"name":"host_info_show","value":"1"}
+	]}`
+	fa.mu.Unlock()
+
+	resp := postForm(t, client, base+"/settings/reset", url.Values{})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("reset: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "reset to the standard competitive rules") {
+		t.Fatalf("reset flash:\n%s", flash[:min(1000, len(flash))])
+	}
+
+	fa.mu.Lock()
+	saved := fa.putSettings
+	fa.mu.Unlock()
+	got := map[string]string{}
+	for _, s := range saved {
+		got[s.Name] = s.Value
+	}
+	for name, want := range map[string]string{
+		"mp_maxrounds":  "24",
+		"mp_freezetime": "15",
+		"mp_startmoney": "800",
+		"mp_c4timer":    "40",
+	} {
+		if got[name] != want {
+			t.Fatalf("reset %s = %q, want %q", name, got[name], want)
+		}
+	}
+	// Rows the settings page does not own survive.
+	if got["sv_password"] != "hunter2" {
+		t.Fatalf("reset dropped sv_password: %v", got)
+	}
+	if got["host_info_show"] != "1" {
+		t.Fatalf("reset dropped a non-catalog row: %v", got)
 	}
 }

@@ -801,7 +801,34 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 // block (keeping sv_password and any non-catalog rows), and pushes the result
 // to the agent, which writes server.cfg and applies it live over one RCON
 // connection.
+//
+// The form posts every field, each already showing the value it will save
+// (the operator's when set, the standard competitive default otherwise), so
+// saving one changed field never trips over the empty ones — that
+// one-error-per-field-at-a-time dance is exactly the bug this replaces.
+// Missing fields (a crafted POST without them) fall back the same way, so
+// the page and the file can never disagree about what a save means.
 func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+	s.saveSettings(w, r, nil)
+}
+
+// handleSettingsReset writes the full standard competitive set (the catalog's
+// Default for every row), replacing every curated value the operator had
+// saved. sv_password and non-catalog rows in the managed block survive, as
+// in a normal save.
+func (s *Server) handleSettingsReset(w http.ResponseWriter, r *http.Request) {
+	defaults := map[string]string{}
+	for _, spec := range web.AllSettingSpecs() {
+		defaults[spec.Name] = spec.Default
+	}
+	s.saveSettings(w, r, defaults)
+}
+
+// saveSettings is the shared write path for the settings page. overrides, when
+// non-nil, replaces every catalog value (the reset button); otherwise values
+// come from the posted form, defaulting to the catalog's standard for fields
+// that are missing or blank.
+func (s *Server) saveSettings(w http.ResponseWriter, r *http.Request, overrides map[string]string) {
 	if err := r.ParseForm(); err != nil {
 		redirectFlash(w, r, "/settings", "err", "Bad form.")
 		return
@@ -816,19 +843,45 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// name -> row from the posted form (only catalog rows are accepted).
+	// Resolve a value for every catalog row, in order of authority:
+	//
+	//   1. an override (the reset button pins every field to its standard),
+	//   2. the posted field when it carries a value,
+	//   3. the current file value — a field left blank or missing from the
+	//      POST must not lose what the operator already saved,
+	//   4. the standard competitive default when the cvar has never been
+	//      set at all.
+	//
+	// Rules 3 and 4 are what fix the fresh-install save: before them, a blank
+	// field was "rejected: must be a whole number" — one error per save
+	// until the whole form was filled. Now the field already shows the value
+	// rule 3 or 4 will apply, and a blank simply means "keep that".
 	specs := web.AllSettingSpecs()
+	currentByName := make(map[string]string, len(current))
+	for _, set := range current {
+		currentByName[set.Name] = set.Value
+	}
 	posted := map[string]string{}
 	for _, spec := range specs {
-		val := strings.TrimSpace(r.PostFormValue("set_" + spec.Name))
-		if val != "" || r.PostForm.Has("set_"+spec.Name) {
-			posted[spec.Name] = val
+		var val string
+		if v, ok := overrides[spec.Name]; ok {
+			val = v
+		} else if v := strings.TrimSpace(r.PostFormValue("set_" + spec.Name)); v != "" {
+			val = v
+		} else if v := currentByName[spec.Name]; v != "" {
+			val = v
+		} else {
+			val = spec.Default
 		}
+		if val == "" {
+			continue // nothing standard to apply; the current row survives as-is
+		}
+		posted[spec.Name] = val
 	}
 
-	// Validate every posted value before writing anything: one bad field
-	// must not half-apply a batch.
-	updates := make([]Setting, 0, len(posted))
+	// Validate every value before writing anything: one bad field must not
+	// half-apply a batch.
+	updates := make([]Setting, 0, len(specs))
 	for _, spec := range specs {
 		val, ok := posted[spec.Name]
 		if !ok {
@@ -847,14 +900,14 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	seen := make(map[string]bool, len(current)+len(updates))
 	for _, set := range current {
 		if spec := web.SpecByName(set.Name); spec != nil {
-			// A curated row: the catalog's new value wins.
+			// A curated row: the resolved value wins.
 			if val, ok := posted[set.Name]; ok {
 				merged = append(merged, Setting{Name: set.Name, Value: val, Comment: set.Comment})
 				seen[set.Name] = true
 				continue
 			}
-			// Not posted (the form posts every catalog field, but be safe):
-			// keep the current value untouched.
+			// Not resolved (nothing posted and no default — impossible with
+			// today's catalog, but be safe): keep the current value.
 			merged = append(merged, set)
 			seen[set.Name] = true
 			continue
@@ -875,8 +928,15 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := userFromCtx(r)
-	s.store.Audit(u.Username, "settings.save", fmt.Sprintf("%d settings", len(updates)))
+	if overrides != nil {
+		s.store.Audit(u.Username, "settings.reset", "competitive defaults")
+	} else {
+		s.store.Audit(u.Username, "settings.save", fmt.Sprintf("%d settings", len(updates)))
+	}
 	msg := "Settings saved — written to server.cfg and pushed live."
+	if overrides != nil {
+		msg = "Settings reset to the standard competitive rules — written to server.cfg and pushed live."
+	}
 	if warning != "" {
 		msg = "Saved, but: " + warning
 	}

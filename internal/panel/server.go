@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /plugins/{id}/uninstall", s.admin(s.handlePluginUninstall))
 	mux.HandleFunc("GET /settings", s.admin(s.handleSettingsPage))
 	mux.HandleFunc("POST /settings", s.admin(s.handleSettingsPost))
+	mux.HandleFunc("POST /settings/reset", s.admin(s.handleSettingsReset))
 	mux.HandleFunc("POST /settings/warmup", s.admin(s.handleSettingsWarmup))
 	mux.HandleFunc("GET /access", s.admin(s.handleAccessPage))
 	mux.HandleFunc("POST /access/password", s.admin(s.handleAccessPassword))

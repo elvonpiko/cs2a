@@ -3,7 +3,7 @@ package web
 templ SettingsPage(nav *NavUser, toast *Toast, v SettingsView) {
 	<div class="page-head">
 		<h1>Settings</h1>
-		<p>Server rules as CS2 cvars. Saved to server.cfg (so they survive restarts) and pushed to the running server immediately.</p>
+		<p>Server rules as CS2 cvars. Fields start at the standard competitive values (the rules a Premier/competitive match runs), so you can change one field and save — everything else keeps the standard you see. Saved to server.cfg (so they survive restarts) and pushed to the running server immediately.</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {
@@ -35,33 +35,21 @@ templ SettingsPage(nav *NavUser, toast *Toast, v SettingsView) {
 							switch row.Kind {
 								case "bool":
 									<select name={ "set_" + row.Name }>
-										<option value="0" selected?={ !row.HasValue || row.Value == "0" }>off</option>
-										<option value="1" selected?={ row.HasValue && row.Value == "1" }>on</option>
+										<option value="0" selected?={ row.EffectiveValue() == "0" }>off</option>
+										<option value="1" selected?={ row.EffectiveValue() == "1" }>on</option>
 									</select>
 								case "select":
 									<select name={ "set_" + row.Name }>
 										for _, o := range row.Options {
-											<option value={ o.Value } selected?={ row.HasValue && row.Value == o.Value }>{ o.Label }</option>
+											<option value={ o.Value } selected?={ row.EffectiveValue() == o.Value }>{ o.Label }</option>
 										}
 									</select>
 								case "int":
-									if row.HasValue {
-										<input type="number" name={ "set_" + row.Name } value={ row.Value } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="1"/>
-									} else {
-										<input type="number" name={ "set_" + row.Name } placeholder="not set (engine default)" min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="1"/>
-									}
+									<input type="number" name={ "set_" + row.Name } value={ row.EffectiveValue() } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="1"/>
 								case "float":
-									if row.HasValue {
-										<input type="number" name={ "set_" + row.Name } value={ row.Value } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="any"/>
-									} else {
-										<input type="number" name={ "set_" + row.Name } placeholder="not set (engine default)" min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="any"/>
-									}
+									<input type="number" name={ "set_" + row.Name } value={ row.EffectiveValue() } min={ fmtFloat(row.Min) } max={ fmtFloat(row.Max) } step="any"/>
 								default:
-									if row.HasValue {
-										<input type="text" name={ "set_" + row.Name } value={ row.Value }/>
-									} else {
-										<input type="text" name={ "set_" + row.Name } placeholder="not set (engine default)"/>
-									}
+									<input type="text" name={ "set_" + row.Name } value={ row.EffectiveValue() }/>
 							}
 							<p class="hint">{ row.Hint }</p>
 						</label>
@@ -70,26 +58,21 @@ templ SettingsPage(nav *NavUser, toast *Toast, v SettingsView) {
 			}
 			<div class="btn-row section-gap sticky-actions">
 				<button class="btn primary" type="submit">Save settings</button>
-				<a class="btn ghost" href="/settings">Reset</a>
+				<button
+					class="btn ghost"
+					type="submit"
+					formaction="/settings/reset"
+					data-confirm="Set every server setting back to the standard competitive rules (24 rounds, MR12 economy, 40s C4)? Your saved changes are overwritten."
+				>Reset to competitive defaults</button>
+				<a class="btn ghost" href="/settings">Undo edits</a>
 			</div>
 		</form>
 		// sv_password lives on the Access page (it is access control, and its
-		// save path reloads the map so enforcement is immediate). Warmup
-		// start/end are commands, not cvars — buttons, not fields.
-		<div class="card section-gap">
-			<h2>Warmup right now</h2>
-			<p class="sub">mp_warmup_start / mp_warmup_end are commands, not settings — a line in server.cfg would re-fire them on every exec</p>
-			<div class="btn-row">
-				<form method="post" action="/settings/warmup" class="mt0">
-					<input type="hidden" name="action" value="start"/>
-					<button class="btn ghost" type="submit" data-confirm="Start a warmup phase now?">Start warmup</button>
-				</form>
-				<form method="post" action="/settings/warmup" class="mt0">
-					<input type="hidden" name="action" value="end"/>
-					<button class="btn ghost" type="submit" data-confirm="End the warmup and start the match now?">End warmup</button>
-				</form>
-			</div>
-		</div>
+		// save path reloads the map so enforcement is immediate).
+		// mp_warmup_start / mp_warmup_end are deliberately not here either:
+		// they are commands, not settings, and the server already runs its
+		// warmup phase by itself between maps — the length field above is
+		// the part that is actually a setting.
 		if v.ExtraCount > 0 {
 			<p class="hint section-gap">{ fmtInt(v.ExtraCount) } other { plural(v.ExtraCount, "setting", "settings") } live in the managed block outside this catalog (advanced cvars, plugin config). Saving here keeps them untouched.</p>
 		}
