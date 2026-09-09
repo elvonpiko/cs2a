@@ -7,10 +7,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"cs2a/internal/cs2"
 )
 
 // fakeService implements ServiceController for tests.
@@ -579,5 +582,60 @@ func TestWhitelistRefusesEnforcingEmptyList(t *testing.T) {
 	}
 	if _, err := w.Apply(nil); err != nil {
 		t.Fatalf("clearing an unenforced list must work: %v", err)
+	}
+}
+
+// Disabling bots from the settings page must remove the bots already on the
+// server, not just stop new ones: an operator mid-game (casual mode had filled
+// the slots with bot_quota 10 in fill mode) reported kicking bots only to
+// watch them respawn — the quota refilled them. bot_kick is the "remove them
+// now" half of the fix; bot_quota 0 in the managed block is the "never again"
+// half, tested by the panel settings tests.
+func TestSettingsKickBotsWhenQuotaDisabled(t *testing.T) {
+	srv, _, fake, cfg := newTestServer(t, nil)
+	if err := os.MkdirAll(cfg.CFGDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.CFGDir(), "server.cfg"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// quota 0 — bots off
+	if err := srv.ApplyManagedSettings(context.Background(), []cs2.CFGSetting{
+		{Name: "bot_quota", Value: "0", Comment: "managed by cs2a"},
+		{Name: "hostname", Value: "mine"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sent := fake.sent()
+	if !slices.Contains(sent, "bot_kick") {
+		t.Fatalf("quota 0 must fire bot_kick, sent = %v", sent)
+	}
+
+	// quota above 0 — bots wanted at a count; kicking would fight the quota
+	fake.mu.Lock()
+	fake.commands = nil
+	fake.mu.Unlock()
+	if err := srv.ApplyManagedSettings(context.Background(), []cs2.CFGSetting{
+		{Name: "bot_quota", Value: "8", Comment: "managed by cs2a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(fake.sent(), "bot_kick") {
+		t.Fatalf("quota 8 must not kick bots, sent = %v", fake.sent())
+	}
+
+	// fill mode off with no quota in the batch — the mode switch alone means
+	// the fill bots go
+	fake.mu.Lock()
+	fake.commands = nil
+	fake.mu.Unlock()
+	if err := srv.ApplyManagedSettings(context.Background(), []cs2.CFGSetting{
+		{Name: "bot_quota_mode", Value: "normal", Comment: "managed by cs2a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(fake.sent(), "bot_kick") {
+		t.Fatalf("leaving fill mode must fire bot_kick, sent = %v", fake.sent())
 	}
 }

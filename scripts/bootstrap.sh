@@ -1049,6 +1049,13 @@ sv_lan 0
 $([[ -n $GSLT ]] && printf 'sv_setsteamaccount "%s"\n' "$GSLT")
 CFG
   )
+  # A fresh CS2 install defaults to casual mode, whose gamemode_casual_server.cfg
+  # sets bot_quota 10 in fill mode — an untouched server quietly fills its empty
+  # slots with bots the moment a map loads, and refill-after-kick is the mode
+  # config re-firing on every map change. Pinning the quota at install time
+  # means the operator decides when bots exist; the panel's settings page owns
+  # the value from its first save (its managed block carries bot_quota too).
+  printf 'bot_quota "0"\nbot_quota_mode "normal"\n' >> "$CFG_DIR/server.cfg"
   ok "server.cfg created (0640 — it holds the RCON password)"
   CFG_NEEDS_RESTART=1
 elif cfg_has_key "$CFG_DIR/server.cfg" rcon_password; then

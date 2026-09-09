@@ -355,6 +355,41 @@ func (s *Server) pushSettingsLive(ctx context.Context, settings []cs2.CFGSetting
 			return // a dead connection will not revive for the next cvar
 		}
 	}
+	// Dropping bot_quota to 0 (or quota mode away from fill) has to clear
+	// the bots already on the server, not just stop new ones: CS2 keeps the
+	// spawned bots until the next round, and bot_kick is the command for
+	// "remove them now". Without this, disabling bots after a mid-game bot
+	// swarm left the players fighting them until the map changed.
+	kickBots(cctx, c, live)
+}
+
+// kickBots fires bot_kick when a settings batch disables bots: quota 0, or a
+// quota mode that no longer fills with them. Quota counts above zero leave
+// the spawn management to the engine — kicking there would fight the quota.
+func kickBots(ctx context.Context, c *rcon.Client, live []cs2.CFGSetting) {
+	quota, haveQuota := "", false
+	mode, haveMode := "", false
+	for _, set := range live {
+		switch set.Name {
+		case "bot_quota":
+			quota, haveQuota = set.Value, true
+		case "bot_quota_mode":
+			mode, haveMode = set.Value, true
+		}
+	}
+	if !haveQuota && !haveMode {
+		return
+	}
+	if haveQuota && quota != "0" {
+		return // bots are wanted at a count, not being switched off
+	}
+	if !haveQuota && haveMode && mode == "fill" {
+		return // quota untouched and still filling: nothing asked to change
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	_, _ = c.ExecContext(ctx, "bot_kick")
 }
 
 // SetPassword is a convenience wrapper: sets (or clears) sv_password.

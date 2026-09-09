@@ -87,7 +87,8 @@ func boolOption(v, l string) SettingOption { return SettingOption{v, l} }
 // Default values are the MR12 competitive standard (the rules a player meets
 // in Premier / competitive matchmaking): 24 max rounds, 1.92-minute rounds,
 // 15 s freeze time, 40 s C4, $800 start money, $16000 cap, 45 s buy time,
-// and friendly fire on.
+// friendly fire on, and no bots — a practice server that suddenly fills with
+// bots mid-match is not standard anything.
 func SettingsCatalog() []SettingGroup {
 	return []SettingGroup{
 		{
@@ -168,6 +169,27 @@ func SettingsCatalog() []SettingGroup {
 					Hint: "Moves players between rounds when one side is stacked. Applies from the next round. (Off in competitive play — teams swap at halftime instead.)"},
 				{Name: "mp_limitteams", Label: "Max team size difference (0 = no limit)", Kind: KindInt, Min: 0, Max: 8, Default: "1",
 					Hint: "Blocks joining the bigger team beyond this — live immediately."},
+			},
+		},
+		{
+			Title: "Bots",
+			Blurb: "The bot quota. Casual mode ships with bot_quota 10 in fill mode, so an untouched server quietly fills its empty slots with bots — and can refill them mid-match after a map change. Keep 0 for a humans-only server.",
+			Rows: []SettingSpec{
+				{Name: "bot_quota", Label: "Bots on the server", Kind: KindInt, Min: 0, Max: 20, Default: "0",
+					Hint: "0 = no bots (standard competitive practice). Changing it applies on the next round/map change; setting it to 0 also kicks current bots at the next round."},
+				{Name: "bot_quota_mode", Label: "Bot quota mode", Kind: KindSelect, Options: []SettingOption{
+					boolOption("normal", "Fixed count (bot_quota)"),
+					boolOption("fill", "Fill empty slots"),
+					boolOption("match", "Match humans"),
+				}, Default: "normal",
+					Hint: "Fill is what makes a casual server suddenly swarm with bots — the panel pins bot_quota to 0 so the mode only matters once you ask for bots."},
+				{Name: "bot_difficulty", Label: "Bot difficulty", Kind: KindSelect, Options: []SettingOption{
+					boolOption("0", "Easy"),
+					boolOption("1", "Fair"),
+					boolOption("2", "Tough"),
+					boolOption("3", "Expert"),
+				}, Default: "1",
+					Hint: "Only relevant when bots are enabled."},
 			},
 		},
 		{

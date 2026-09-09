@@ -1735,7 +1735,7 @@ func TestSettingsPageCatalogAndSave(t *testing.T) {
 
 	body := getBody(t, client, base+"/settings")
 	for _, want := range []string{
-		"Game mode", "Warmup length (seconds)", "C4 timer (seconds)", "Friendly fire",
+		"Game mode", "Warmup length (seconds)", "C4 timer (seconds)", "Friendly fire", "Bots on the server",
 		`name="set_mp_freezetime"`, `value="6"`, `name="set_sv_gravity" value="800"`,
 		`name="set_mp_maxrounds" value="24"`, // absent from the block: the standard default
 	} {
@@ -1880,6 +1880,7 @@ func TestSettingsPartialSaveOnFreshInstall(t *testing.T) {
 		`name="set_mp_maxrounds" value="24"`,
 		`name="set_mp_startmoney" value="800"`,
 		`name="set_mp_c4timer" value="40"`,
+		`name="set_bot_quota" value="0"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("fresh settings page missing default %q:\n%s", want, body[:min(2000, len(body))])
@@ -1919,6 +1920,8 @@ func TestSettingsPartialSaveOnFreshInstall(t *testing.T) {
 		"mp_c4timer":      "40",
 		"mp_warmuptime":   "60",
 		"mp_friendlyfire": "1",
+		"bot_quota":       "0",
+		"bot_quota_mode":  "normal",
 	} {
 		if got[name] != want {
 			t.Fatalf("%s = %q, want default %q", name, got[name], want)
@@ -1945,6 +1948,7 @@ func TestSettingsResetToDefaults(t *testing.T) {
 		{"name":"mp_maxrounds","value":"99"},
 		{"name":"mp_freezetime","value":"1"},
 		{"name":"mp_startmoney","value":"60000"},
+		{"name":"bot_quota","value":"10"},
 		{"name":"host_info_show","value":"1"}
 	]}`
 	fa.mu.Unlock()
@@ -1970,6 +1974,7 @@ func TestSettingsResetToDefaults(t *testing.T) {
 		"mp_freezetime": "15",
 		"mp_startmoney": "800",
 		"mp_c4timer":    "40",
+		"bot_quota":     "0",
 	} {
 		if got[name] != want {
 			t.Fatalf("reset %s = %q, want %q", name, got[name], want)
