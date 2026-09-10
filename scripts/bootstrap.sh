@@ -1307,13 +1307,57 @@ $PANEL_DOMAIN {
     ok "added the cs2a import to your Caddyfile (backup: $CADDY_RESTORE)"
   fi
   if [[ $HAVE_CADDY -eq 1 ]]; then
+    # Caddy's ACME client (Go, like caddy itself) advertises the post-quantum
+    # X25519MLKEM768 key share by default, growing the TLS ClientHello past
+    # 1.5 KB. Middleboxes in the path that cannot relay the oversized hello
+    # drop it silently, so Let's Encrypt never answers and no certificate is
+    # ever issued — the server just times out. Networks with such middleware
+    # exist in the wild (enterprise firewalls, some ISPs); the user cannot see
+    # any of it, only "caddy running" followed by no HTTPS. Dropping the
+    # hybrid key share via GODEBUG shrinks the hello back to normal size and
+    # costs nothing on healthy paths — classical key exchange still runs, the
+    # post-quantum layer was opportunistic. A drop-in, never an edit: an
+    # operator's own caddy unit file stays byte-for-byte theirs.
+    CADDY_DROPIN="/etc/systemd/system/caddy.service.d/20-cs2a-acme.conf"
+    CADDY_DROPIN_BODY="# managed by cs2a — keeps caddy's ACME client reachable through middleboxes
+# that drop the oversized (post-quantum X25519MLKEM768) TLS ClientHello Go
+# sends by default. Delete this file to go back to caddy's own defaults.
+[Service]
+Environment=GODEBUG=tlsmlkem=0,tlssecpmlkem=0
+"
+    CADDY_DROPIN_FRESH=0
+    if [[ -f $CADDY_DROPIN ]] && [[ $(cat "$CADDY_DROPIN") == "$CADDY_DROPIN_BODY" ]]; then
+      skip "ACME compatibility drop-in already in place"
+    else
+      ensure_dirs /etc/systemd/system/caddy.service.d
+      printf '%s' "$CADDY_DROPIN_BODY" > "$CADDY_DROPIN"
+      CADDY_DROPIN_FRESH=1
+      # daemon-reload immediately, whatever happens to the config validation
+      # below: without it systemd never learns the drop-in exists, and even
+      # the operator's own later `systemctl restart caddy` would run without
+      # the fixed environment.
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      ok "wrote $CADDY_DROPIN (ACME keeps working on middlebox-broken networks)"
+    fi
     if caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
       systemctl enable caddy >/dev/null 2>&1 || true
-      if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
+      # A fresh drop-in needs a restart, not a reload: reload (SIGHUP) does
+      # not re-exec the unit's environment, so a running caddy would keep
+      # the very environment the drop-in exists to fix. Unchanged units can
+      # keep the polite reload.
+      if [[ $CADDY_DROPIN_FRESH -eq 1 ]]; then
+        if systemctl restart caddy 2>/dev/null; then
+          CADDY_SERVING=1
+        else
+          warn "caddy would not restart — run: systemctl status caddy"
+        fi
+      elif systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
         CADDY_SERVING=1
-        ok "caddy running — a certificate for $PANEL_DOMAIN is issued on first request"
       else
         warn "caddy would not reload — run: systemctl status caddy"
+      fi
+      if [[ $CADDY_SERVING -eq 1 ]]; then
+        ok "caddy running — a certificate for $PANEL_DOMAIN is issued on first request"
       fi
     else
       # A broken config left in place would keep Caddy on its old one and the

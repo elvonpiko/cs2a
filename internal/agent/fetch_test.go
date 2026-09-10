@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,5 +242,87 @@ func TestDependencyErrorNamesTheRootCause(t *testing.T) {
 	}
 	if strings.Count(msg, "required first") != 1 {
 		t.Fatalf("nested prefixes not collapsed: %s", msg)
+	}
+}
+
+// The final retry attempt must drop the post-quantum key share
+// (X25519MLKEM768) from the TLS handshake. Go 1.24+ advertises it by default,
+// which grows the ClientHello past 1.5 KB; path middleboxes that cannot relay
+// the oversized hello silently drop it, and the download dies with a bare
+// timeout. This server records the curve list of every ClientHello and fails
+// the first requests, so the loop is driven to its last attempt; the last
+// hello must offer no hybrid group, while an earlier one must have it —
+// proving the test can tell the two clients apart.
+func TestFinalAttemptDropsPostQuantumKeyShare(t *testing.T) {
+	var mu sync.Mutex
+	var hellos [][]tls.CurveID
+	var hits int32
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&hits, 1) < fetchAttempts {
+			w.WriteHeader(http.StatusInternalServerError) // retryable
+			return
+		}
+		io.WriteString(w, "ok")
+	}))
+	srv.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS12, // h1 only: no h2 negotiation to lean on
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			mu.Lock()
+			hellos = append(hellos, append([]tls.CurveID(nil), hello.SupportedCurves...))
+			mu.Unlock()
+			return nil, nil // proceed with the server config above
+		},
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	err := httpGet(context.Background(), srv.Client(), srv.URL, nil, func(*http.Response) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("httpGet: %v", err)
+	}
+	if int(hits) != fetchAttempts {
+		t.Fatalf("hits = %d, want %d (loop must reach the final attempt)", hits, fetchAttempts)
+	}
+
+	hasHybrid := func(list []tls.CurveID) bool {
+		for _, c := range list {
+			if c == tls.X25519MLKEM768 {
+				return true
+			}
+		}
+		return false
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hellos) == 0 {
+		t.Fatal("no TLS handshakes recorded")
+	}
+	// Sensitivity: the ordinary attempts must have offered the hybrid. If a
+	// future Go removes it from the defaults, that is fine — but then this
+	// test stops proving anything and should be revisited, so fail loudly.
+	if !hasHybrid(hellos[0]) {
+		t.Skip("default client no longer offers X25519MLKEM768; the workaround is moot in this Go version")
+	}
+	last := hellos[len(hellos)-1]
+	if hasHybrid(last) {
+		t.Fatal("final attempt still offered X25519MLKEM768 — the compat downgrade did not apply")
+	}
+}
+
+// compatCurvePreferences must never grow the hybrid back: it is the whole
+// point of the downgrade, and a future edit to "modernise" the list would
+// silently reintroduce the middlebox failure on the last retry.
+func TestCompatCurveListHasNoHybrid(t *testing.T) {
+	for _, c := range compatCurvePreferences {
+		if c == tls.X25519MLKEM768 {
+			t.Fatal("compat curve list must not contain X25519MLKEM768")
+		}
+	}
+	if len(compatCurvePreferences) == 0 {
+		t.Fatal("compat curve list is empty")
 	}
 }

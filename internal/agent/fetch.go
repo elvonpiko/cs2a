@@ -69,10 +69,27 @@ func newTransport() *http.Transport {
 	return tr
 }
 
-// http11Client clones a client with HTTP/2 disabled. Cloudflare-fronted hosts
-// (mms.alliedmods.net) sometimes reset an h2 stream mid-body while plain
-// HTTP/1.1 completes fine, so the final attempt drops to h1 rather than
-// failing an install for a protocol-level hiccup.
+// http11Client clones a client for the last retry attempt with two
+// compatibility downgrades: HTTP/2 disabled, and the post-quantum key share
+// dropped from the TLS handshake.
+//
+// The h2 half: Cloudflare-fronted hosts (mms.alliedmods.net) sometimes reset
+// an h2 stream mid-body while plain HTTP/1.1 completes fine.
+//
+// The curve half: Go 1.24+ advertises X25519MLKEM768 by default, which grows
+// the TLS ClientHello to ~1.5 KB. Path middleboxes that cannot relay the
+// oversized hello (seen on real VPS networks between the server and Let's
+// Encrypt, GitHub, and Steam CDNs) silently drop it, surfacing as a timeout
+// with no reset. Listing only classical curves shrinks the hello back to
+// normal size. Security is not meaningfully reduced: every one of these
+// hosts keeps classical X25519; the post-quantum layer was opportunistic.
+// The constants below are the Go default curve set minus the hybrid.
+var compatCurvePreferences = []tls.CurveID{
+	tls.X25519,
+	tls.CurveP256,
+	tls.CurveP384,
+}
+
 func http11Client(base *http.Client) *http.Client {
 	tr, ok := base.Transport.(*http.Transport)
 	if !ok {
@@ -91,6 +108,7 @@ func http11Client(base *http.Client) *http.Client {
 		h1.TLSClientConfig = h1.TLSClientConfig.Clone()
 	}
 	h1.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	h1.TLSClientConfig.CurvePreferences = compatCurvePreferences
 	return &http.Client{Transport: h1, Timeout: base.Timeout, CheckRedirect: base.CheckRedirect}
 }
 

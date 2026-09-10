@@ -60,6 +60,7 @@ echo "  - $CS2A_ROOT/bin"
 [[ $OWN_GAME_UNIT -eq 1 ]] && echo "  - $GAME_UNIT.service (written by cs2a)"
 [[ -f $USERCON_DROPIN ]] && echo "  - $USERCON_DROPIN (the -usercon drop-in cs2a added)"
 [[ -f /etc/caddy/cs2a.caddyfile ]] && echo "  - /etc/caddy/cs2a.caddyfile and its import line"
+[[ -f /etc/systemd/system/caddy.service.d/20-cs2a-acme.conf ]] && echo "  - /etc/systemd/system/caddy.service.d/20-cs2a-acme.conf (the ACME compatibility drop-in)"
 [[ $PURGE_CONFIG -eq 1 ]] && echo "  - $CS2A_ROOT/etc and $CS2A_ROOT/var (config, database, credentials)"
 [[ $PURGE_GAME -eq 1 ]] && echo "  - $CS2_DIR (the CS2 install — this cannot be undone)"
 if [[ $OWN_GAME_UNIT -eq 0 && -f $GAME_UNIT_FILE ]]; then
@@ -124,4 +125,10 @@ if [[ -f /etc/caddy/cs2a.caddyfile ]]; then
   fi
 elif [[ -f /etc/caddy/Caddyfile ]] && grep -q "cs2a" /etc/caddy/Caddyfile; then
   echo "cs2a: an older cs2a site block may still be in /etc/caddy/Caddyfile — remove it by hand if you no longer need it."
+fi
+# The ACME drop-in belongs to cs2a even when nothing else caddy-related does.
+CADDY_DROPIN="/etc/systemd/system/caddy.service.d/20-cs2a-acme.conf"
+if [[ -f $CADDY_DROPIN ]]; then
+  rm -f "$CADDY_DROPIN"
+  echo "cs2a: removed $CADDY_DROPIN (caddy's ACME client is back to its own defaults) — reload: systemctl daemon-reload && systemctl restart caddy"
 fi
