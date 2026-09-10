@@ -55,6 +55,9 @@ type fakeAgent struct {
 	wlEmpty bool
 	// wlPluginInstalled gates the whitelist card on the access page.
 	wlPluginInstalled bool
+	// wpInstalled marks weaponpaints installed in the plugins body, which is
+	// what gates the Loadout tab and routes.
+	wpInstalled bool
 }
 
 func (f *fakeAgent) handler() http.Handler {
@@ -213,7 +216,15 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if !check(w, r) {
 			return
 		}
-		w.Write([]byte(f.plugins))
+		f.mu.Lock()
+		body, wp := f.plugins, f.wpInstalled
+		f.mu.Unlock()
+		if wp {
+			// same list with weaponpaints installed — the panel's Loadout
+			// gate keys on this
+			body = `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"],"installed":true},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime"}]}`
+		}
+		w.Write([]byte(body))
 	})
 	// installs are async: the agent answers 202 with a job, and the panel
 	// polls /api/v1/jobs while the download runs
@@ -514,6 +525,9 @@ func TestPanelAuthFlow(t *testing.T) {
 
 func TestPanelRolesAndActions(t *testing.T) {
 	client, fa, base := newPanelTest(t)
+	fa.mu.Lock()
+	fa.wpInstalled = true
+	fa.mu.Unlock()
 
 	// create admin + player via store through setup & users API is tested
 	// elsewhere; here create directly with a second panel store access —
@@ -616,6 +630,9 @@ func TestPanelRolesAndActions(t *testing.T) {
 func TestLoadoutSaveWarnsWhenSyncIsOff(t *testing.T) {
 	client, fa, base := newPanelTest(t)
 	fa.loadoutSyncOff = true
+	fa.mu.Lock()
+	fa.wpInstalled = true
+	fa.mu.Unlock()
 	_ = get(t, client, base+"/setup")
 	_ = postForm(t, client, base+"/setup", url.Values{
 		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
@@ -1539,6 +1556,9 @@ func TestWhitelistCardListsAndRemovesPlayers(t *testing.T) {
 // WeaponPaints row the plugin renders as nothing).
 func TestLoadoutWeaponSkins(t *testing.T) {
 	client, fa, base := newPanelTest(t)
+	fa.mu.Lock()
+	fa.wpInstalled = true
+	fa.mu.Unlock()
 	_ = get(t, client, base+"/setup")
 	_ = postForm(t, client, base+"/setup", url.Values{
 		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
@@ -1605,6 +1625,86 @@ func TestLoadoutWeaponSkins(t *testing.T) {
 	fa.mu.Unlock()
 	if pick, ok := tSkins["7"]; !ok || pick != "" {
 		t.Fatalf("vanilla save must record the empty pick (row delete), got %q (present=%v)", pick, ok)
+	}
+}
+
+// The Loadout page and tab appear only when both gates hold: WeaponPaints
+// installed on the server AND a linked SteamID on the account. Direct URL
+// access to a gated-out page redirects home with the reason, and the two
+// gates fail independently with their own message. Install and uninstall are
+// driven through the panel's own actions, because that is what resets the
+// nav's plugin-capability cache in production.
+func TestLoadoutGatedOnPluginAndSteamID(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+		"steamid": {"76561197961500295"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// plugin missing (fresh default: weaponpaints not installed)
+	resp := get(t, client, base+"/loadout")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("plugin missing: expected redirect, got %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "WeaponPaints plugin") {
+		t.Fatalf("plugin-missing flash must name the plugin:\n%s", flash[:min(1000, len(flash))])
+	}
+	body := getBody(t, client, base+"/")
+	if strings.Contains(body, `href="/loadout"`) {
+		t.Fatal("nav must hide the Loadout tab while WeaponPaints is not installed")
+	}
+
+	// install through the panel → the fake agent now reports it installed,
+	// and the panel's own action reset the caps cache
+	_ = postForm(t, client, base+"/plugins/weaponpaints/install", nil)
+	fa.mu.Lock()
+	fa.wpInstalled = true
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/")
+	if !strings.Contains(body, `href="/loadout"`) {
+		t.Fatal("nav must show the Loadout tab once WeaponPaints is installed and the id is linked")
+	}
+	if getBody(t, client, base+"/loadout") == "" {
+		t.Fatal("loadout page must render for a gated-in account")
+	}
+
+	// uninstall through the panel → tab and page vanish again
+	_ = postForm(t, client, base+"/plugins/weaponpaints/uninstall", nil)
+	fa.mu.Lock()
+	fa.wpInstalled = false
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/")
+	if strings.Contains(body, `href="/loadout"`) {
+		t.Fatal("nav must hide the Loadout tab again after uninstall")
+	}
+	resp = get(t, client, base+"/loadout")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("after uninstall: expected redirect, got %d", resp.StatusCode)
+	}
+
+	// linked id missing (plugin reinstalled) → its own message
+	_ = postForm(t, client, base+"/plugins/weaponpaints/install", nil)
+	fa.mu.Lock()
+	fa.wpInstalled = true
+	fa.mu.Unlock()
+	_ = postForm(t, client, base+"/users/create", url.Values{
+		"username": {"noID"}, "password": {"password12345"}, "role": {"player"},
+	})
+	loginAs(t, client, base, "noID", "password12345")
+	resp = get(t, client, base+"/loadout")
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("no steamid: expected redirect, got %d", resp.StatusCode)
+	}
+	flash = getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "linked SteamID") {
+		t.Fatalf("no-steamid flash must name the missing link:\n%s", flash[:min(1000, len(flash))])
+	}
+	body = getBody(t, client, base+"/")
+	if strings.Contains(body, `href="/loadout"`) {
+		t.Fatal("nav must hide the Loadout tab for an account with no linked SteamID")
 	}
 }
 
@@ -1792,15 +1892,15 @@ func TestUserRoleChanges(t *testing.T) {
 		t.Fatal("bob must offer Promote after demotion")
 	}
 
-	// The nav keeps the Loadout tab for admins: the tab is role-gated on the
-	// page itself (players and admins both link a SteamID), so hiding it from
-	// the admin nav made the page unreachable by link the moment someone was
-	// promoted — it looked like promotion broke the loadout feature.
+	// The Loadout tab is capability-gated, not role-gated: admin bob and
+	// player bob see the same thing, and with no linked SteamID on either
+	// account there is no loadout to manage — the tab is absent, not a
+	// dead link.
 	for _, who := range []struct{ user, pass string }{{"admin", "password123"}, {"bob", "password12345"}} {
 		loginAs(t, client, base, who.user, who.pass)
 		body = getBody(t, client, base+"/")
-		if !strings.Contains(body, `href="/loadout"`) {
-			t.Fatalf("%s's nav has no Loadout tab", who.user)
+		if strings.Contains(body, `href="/loadout"`) {
+			t.Fatalf("%s has no linked SteamID — the Loadout tab must be absent", who.user)
 		}
 	}
 	// the checks below are the admin's again

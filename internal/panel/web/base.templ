@@ -48,13 +48,16 @@ templ Base(title string, nav *NavUser, content templ.Component) {
 					@Brand()
 					<nav class="nav-links" aria-label="Main">
 						if nav != nil {
-							// Loadout is for every signed-in user: players pick
-							// their own skins, and an admin is also a player —
-							// the old hard either/or hid the tab the moment
-							// someone was promoted, as if admin and player
-							// were mutually exclusive hats.
 							<a href="/" class={ "nav-js", templ.KV("active", nav.Active == "server") } aria-current={ ariaCurrent(nav.Active == "server") }>Server</a>
-							<a href="/loadout" class={ "nav-js", templ.KV("active", nav.Active == "loadout") } aria-current={ ariaCurrent(nav.Active == "loadout") }>Loadout</a>
+							// The Loadout tab exists only when there is a
+							// loadout to manage: WeaponPaints installed (the
+							// thing that renders the skins) and a linked
+							// SteamID on this account (the thing the loadout
+							// is stored under). Either missing and the tab is
+							// absent — not a page that nags about setup.
+							if nav.ShowLoadout {
+								<a href="/loadout" class={ "nav-js", templ.KV("active", nav.Active == "loadout") } aria-current={ ariaCurrent(nav.Active == "loadout") }>Loadout</a>
+							}
 							if nav.IsAdmin() {
 								<a href="/plugins" class={ "nav-js", templ.KV("active", nav.Active == "plugins") } aria-current={ ariaCurrent(nav.Active == "plugins") }>Plugins</a>
 								<a href="/settings" class={ "nav-js", templ.KV("active", nav.Active == "settings") } aria-current={ ariaCurrent(nav.Active == "settings") }>Settings</a>

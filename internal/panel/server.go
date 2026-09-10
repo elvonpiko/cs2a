@@ -23,11 +23,16 @@ type Server struct {
 	// throttle slows password guessing on /login (the panel is the only
 	// internet-facing component).
 	throttle *loginThrottle
+	// caps caches which feature-defining plugins are installed, so every
+	// page render does not become an agent round-trip just to build the nav.
+	// The Loadout tab lives or dies with WeaponPaints, so a stale entry only
+	// delays the tab by one TTL, never hides it for good.
+	caps *capsCache
 }
 
 // NewServer wires the panel.
 func NewServer(cfg Config, store *Store, agent *AgentClient, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: store, agent: agent, log: log, throttle: newLoginThrottle()}
+	return &Server{cfg: cfg, store: store, agent: agent, log: log, throttle: newLoginThrottle(), caps: &capsCache{}}
 }
 
 // ctxKey is the context key type for request-scoped values.
@@ -89,8 +94,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /users/create", s.admin(s.handleUserCreate))
 	mux.HandleFunc("POST /users/delete", s.admin(s.handleUserDelete))
 	mux.HandleFunc("POST /users/role", s.admin(s.handleUserRole))
-	mux.HandleFunc("GET /loadout", s.auth(s.handleLoadoutPage))
-	mux.HandleFunc("POST /loadout", s.auth(s.handleLoadoutPost))
+	mux.HandleFunc("GET /loadout", s.auth(s.requireLoadout(s.handleLoadoutPage)))
+	mux.HandleFunc("POST /loadout", s.auth(s.requireLoadout(s.handleLoadoutPost)))
 
 	// server actions
 	mux.HandleFunc("POST /do/start", s.admin(s.handleServerAction("start")))
@@ -413,16 +418,42 @@ func (s *Server) renderSetup(w http.ResponseWriter, errMsg string) {
 
 // --- helpers -------------------------------------------------------------
 
+// requireLoadout hides the loadout feature from accounts and servers that
+// have no use for it: WeaponPaints must be installed and the account must
+// carry a linked SteamID. Direct URL access gets a redirect with the reason,
+// because a bookmarked page that vanished without a word looks broken.
+func (s *Server) requireLoadout(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFromCtx(r)
+		if u == nil {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		if u.SteamID64 == "" {
+			redirectFlash(w, r, "/", "err", "The loadout needs a linked SteamID on your account — ask an admin to add one on the Users page.")
+			return
+		}
+		if !s.caps.weaponPaints(r.Context(), s.agent) {
+			redirectFlash(w, r, "/", "err", "The loadout needs the WeaponPaints plugin — an admin can install it on the Plugins page.")
+			return
+		}
+		next(w, r)
+	}
+}
+
 // navFor builds the layout nav model for the current user. The Loadout tab
 // is gated on both sides of the deal: the server must have WeaponPaints
 // installed (without it there is nothing to sync a loadout to) and the
 // account must have a linked SteamID (the loadout is stored per SteamID).
 // Missing either, the tab is absent — not a page that says "link your id".
-func navFor(u *User, active string) *web.NavUser {
+func (s *Server) navFor(r *http.Request, u *User, active string) *web.NavUser {
 	if u == nil {
 		return nil
 	}
-	return &web.NavUser{Name: u.Username, Role: u.Role, SteamID: u.SteamID64, Active: active}
+	return &web.NavUser{
+		Name: u.Username, Role: u.Role, SteamID: u.SteamID64, Active: active,
+		ShowLoadout: u.SteamID64 != "" && s.caps.weaponPaints(r.Context(), s.agent),
+	}
 }
 
 // flash reads the query-string flash message (PRG pattern).

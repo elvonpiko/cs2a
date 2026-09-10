@@ -168,7 +168,7 @@ func exitStatusLabel(kind string, code int) string {
 func (s *Server) handleServerPage(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	v := s.buildServerView(r, u)
-	comp := web.Base("Server", navFor(u, "server"), web.ServerPage(navFor(u, "server"), flash(r), v))
+	comp := web.Base("Server", s.navFor(r, u, "server"), web.ServerPage(s.navFor(r, u, "server"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render server page", "err", err)
 	}
@@ -365,7 +365,7 @@ func (s *Server) handlePluginsPage(w http.ResponseWriter, r *http.Request) {
 		return // redirected with flash
 	}
 	jobs := s.pluginJobViews(r)
-	comp := web.Base("Plugins", navFor(u, "plugins"), web.PluginsPage(navFor(u, "plugins"), flash(r), entries, jobs))
+	comp := web.Base("Plugins", s.navFor(r, u, "plugins"), web.PluginsPage(s.navFor(r, u, "plugins"), flash(r), entries, jobs))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render plugins", "err", err)
 	}
@@ -456,6 +456,10 @@ func (s *Server) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.Audit(u.Username, "plugin.install.start", id+" job="+job.ID)
+	// The install job changes what the nav can offer (WeaponPaints gates the
+	// Loadout tab); dropping the caps cache now means the tab follows the
+	// finished job instead of a stale answer.
+	s.caps.reset()
 	redirectFlash(w, r, "/plugins", "ok", "Installing "+id+" — progress appears below, you can leave this page.")
 }
 
@@ -477,6 +481,7 @@ func (s *Server) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.Audit(u.Username, "plugin.uninstall", id)
+	s.caps.reset()
 	redirectFlash(w, r, "/plugins", "ok", "Uninstalled "+id+". A restart is recommended.")
 }
 
@@ -493,7 +498,7 @@ func (s *Server) handlePluginConfigPage(w http.ResponseWriter, r *http.Request) 
 	if v.JSON == "" {
 		v.JSON = "{\n  \n}"
 	}
-	comp := web.Base("Config", navFor(u, "plugins"), web.PluginConfigPage(navFor(u, "plugins"), flash(r), v))
+	comp := web.Base("Config", s.navFor(r, u, "plugins"), web.PluginConfigPage(s.navFor(r, u, "plugins"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render plugin config", "err", err)
 	}
@@ -506,7 +511,7 @@ func (s *Server) handlePluginConfigPost(w http.ResponseWriter, r *http.Request) 
 	if err := s.agent.SavePluginConfig(r.Context(), id, body); err != nil {
 		flash := web.Toast{Kind: "err", Message: "Save failed: " + err.Error()}
 		v := web.PluginConfigView{ID: id, Name: id, JSON: body}
-		comp := web.Base("Config", navFor(u, "plugins"), web.PluginConfigPage(navFor(u, "plugins"), &flash, v))
+		comp := web.Base("Config", s.navFor(r, u, "plugins"), web.PluginConfigPage(s.navFor(r, u, "plugins"), &flash, v))
 		_ = comp.Render(r.Context(), w)
 		return
 	}
@@ -545,7 +550,7 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 			v.AddableUsers = addableWhitelistUsers(users, st.SteamIDs)
 		}
 	}
-	comp := web.Base("Access", navFor(u, "access"), web.AccessPage(navFor(u, "access"), flash(r), v))
+	comp := web.Base("Access", s.navFor(r, u, "access"), web.AccessPage(s.navFor(r, u, "access"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render access", "err", err)
 	}
@@ -783,7 +788,7 @@ func (s *Server) handleUsersPage(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	comp := web.Base("Users", navFor(u, "users"), web.UsersPage(navFor(u, "users"), flash(r), v, u.ID))
+	comp := web.Base("Users", s.navFor(r, u, "users"), web.UsersPage(s.navFor(r, u, "users"), flash(r), v, u.ID))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render users", "err", err)
 	}
@@ -905,7 +910,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	comp := web.Base("Settings", navFor(u, "settings"), web.SettingsPage(navFor(u, "settings"), flash(r), v))
+	comp := web.Base("Settings", s.navFor(r, u, "settings"), web.SettingsPage(s.navFor(r, u, "settings"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render settings", "err", err)
 	}
@@ -1132,7 +1137,7 @@ func (s *Server) handleLoadoutPage(w http.ResponseWriter, r *http.Request) {
 			v.SyncEnabled = lo.SyncEnabled
 		}
 	}
-	comp := web.Base("Loadout", navFor(u, "loadout"), web.LoadoutPage(navFor(u, "loadout"), flash(r), v))
+	comp := web.Base("Loadout", s.navFor(r, u, "loadout"), web.LoadoutPage(s.navFor(r, u, "loadout"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render loadout", "err", err)
 	}

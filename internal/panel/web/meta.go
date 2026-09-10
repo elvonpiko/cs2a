@@ -12,6 +12,11 @@ type NavUser struct {
 	Role    string // "admin" | "player"
 	SteamID string
 	Active  string // nav section key to highlight: server|plugins|access|users|loadout
+	// ShowLoadout gates the Loadout tab: the page exists only when
+	// WeaponPaints is installed AND this account has a linked SteamID.
+	// Missing either, there is no loadout to manage — the tab is hidden
+	// rather than leading to a page that nags for setup.
+	ShowLoadout bool
 }
 
 // IsAdmin reports whether the nav user is an admin.
