@@ -22,11 +22,21 @@ type API struct {
 	inst    *Installer
 	loadout *LoadoutStore
 	jobs    *Jobs
+	// updater serves the CS2 build check/update endpoints. Optional so tests
+	// that do not exercise updates can construct an API without one.
+	updater *Updater
 }
 
 // NewAPI wires the HTTP API.
 func NewAPI(cfg Config, srv *Server, wh *Whitelist, inst *Installer, loadout *LoadoutStore) *API {
 	return &API{cfg: cfg, server: srv, wh: wh, inst: inst, loadout: loadout, jobs: NewJobs()}
+}
+
+// WithUpdater attaches the CS2 updater; nil disables the update endpoints
+// (they answer "no updater configured" rather than panicking).
+func (a *API) WithUpdater(u *Updater) *API {
+	a.updater = u
+	return a
 }
 
 // Handler builds the agent's http.Handler.
@@ -41,6 +51,9 @@ func (a *API) Handler() http.Handler {
 		return a.auth(h)
 	}
 	mux.HandleFunc("GET /api/v1/status", auth(a.handleStatus))
+	mux.HandleFunc("GET /api/v1/server/update", auth(a.handleGetUpdate))
+	mux.HandleFunc("POST /api/v1/server/update", auth(a.handleServerUpdate))
+	mux.HandleFunc("POST /api/v1/server/update/check", auth(a.handleUpdateCheck))
 	mux.HandleFunc("POST /api/v1/server/start", auth(a.action(ActionStart)))
 	mux.HandleFunc("POST /api/v1/server/stop", auth(a.action(ActionStop)))
 	mux.HandleFunc("POST /api/v1/server/restart", auth(a.action(ActionRestart)))
@@ -89,6 +102,77 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.server.Status(r.Context()))
+}
+
+// handleGetUpdate reports the cached build comparison without touching
+// Steam. The status poller can call this every five seconds; a check that
+// spawned steamcmd each time would be a self-inflicted rate limit.
+func (a *API) handleGetUpdate(w http.ResponseWriter, r *http.Request) {
+	if a.updater == nil {
+		writeErr(w, http.StatusNotFound, "no updater configured")
+		return
+	}
+	writeJSON(w, http.StatusOK, a.updater.Info())
+}
+
+// handleUpdateCheck forces a fresh comparison now (steamcmd app_info) and
+// returns it. This is the panel's "Check for update" button; it is
+// synchronous because a check is seconds, unlike an update's minutes.
+func (a *API) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if a.updater == nil {
+		writeErr(w, http.StatusNotFound, "no updater configured")
+		return
+	}
+	info := a.updater.Check(r.Context(), true)
+	code := http.StatusOK
+	if info.LastError != "" {
+		code = http.StatusConflict // the answer exists, but half of it failed
+	}
+	writeJSON(w, code, info)
+}
+
+// handleServerUpdate applies the update as a background job: stopping the
+// game server, downloading ~a few GB and restarting can take tens of
+// minutes, which no request should hold open.
+func (a *API) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
+	if a.updater == nil {
+		writeErr(w, http.StatusNotFound, "no updater configured")
+		return
+	}
+	if a.updater.Updating() {
+		writeErr(w, http.StatusConflict, "an update is already running")
+		return
+	}
+	// The reverse of the install guard: an update while a plugin install or
+	// uninstall is writing into the game tree would clobber its files.
+	if targets := a.jobs.RunningTargets(); len(targets) > 0 {
+		writeErr(w, http.StatusConflict, "a plugin job is running ("+strings.Join(targets, ", ")+") — wait for it to finish before updating the server")
+		return
+	}
+	a.updater.SetUpdating(true)
+	job, err := a.jobs.Start("update", "cs2", "CS2 server", func(ctx context.Context, progress func(Progress)) (*InstallResult, error) {
+		defer a.updater.SetUpdating(false)
+		err := a.updater.Run(ctx, func(step string) {
+			progress(Progress{Step: step})
+		})
+		if err != nil {
+			return nil, err
+		}
+		// An update changes the binary the game unit launches, so a restart
+		// is implied for a server that was online — Run already did it.
+		return &InstallResult{ID: "cs2", RequiresRestart: false}, nil
+	})
+	if err != nil {
+		a.updater.SetUpdating(false)
+		var busy *ErrBusy
+		if errors.As(err, &busy) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, job)
 }
 
 // action performs a lifecycle action and reports the unit's real state.
@@ -371,6 +455,12 @@ func (a *API) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown plugin "+id)
 		return
 	}
+	// A server update rewrites the game tree the installer extracts into;
+	// letting both run leaves the winner's files half-written by the loser.
+	if a.updater != nil && a.updater.Updating() {
+		writeErr(w, http.StatusConflict, "the CS2 server is being updated right now — wait for it to finish before installing plugins")
+		return
+	}
 	if !req.Async {
 		res, err := a.inst.Install(r.Context(), id, req.Force)
 		if err != nil {
@@ -402,6 +492,10 @@ func (a *API) handlePluginInstall(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handlePluginUninstall(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if a.updater != nil && a.updater.Updating() {
+		writeErr(w, http.StatusConflict, "the CS2 server is being updated right now — wait for it to finish before uninstalling plugins")
+		return
+	}
 	// An uninstall while an install is in flight deletes files the extraction is
 	// still writing: the plugin ends up half-present and its recorded manifest
 	// no longer describes what is on disk. The dependency check below cannot see

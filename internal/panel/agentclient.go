@@ -513,6 +513,46 @@ func (c *AgentClient) Jobs(ctx context.Context) ([]Job, error) {
 	return out.Jobs, nil
 }
 
+// UpdateInfo is the agent's knowledge of the CS2 build versus Steam's.
+type UpdateInfo struct {
+	InstalledBuild string    `json:"installed_build"`
+	LatestBuild    string    `json:"latest_build"`
+	Available      bool      `json:"available"`
+	AvailableSince time.Time `json:"available_since"`
+	PendingPlayers bool      `json:"pending_players"`
+	Updating       bool      `json:"updating"`
+	AutoUpdate     bool      `json:"auto_update"`
+	LastCheck      time.Time `json:"last_check"`
+	LastError      string    `json:"last_error"`
+}
+
+// Update fetches the cached build comparison (no steamcmd run).
+func (c *AgentClient) Update(ctx context.Context) (*UpdateInfo, error) {
+	var out UpdateInfo
+	if err := c.do(ctx, http.MethodGet, "/api/v1/server/update", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// CheckUpdate forces a fresh steamcmd comparison and returns it.
+func (c *AgentClient) CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
+	var out UpdateInfo
+	if err := c.do(ctx, http.MethodPost, "/api/v1/server/update/check", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// StartUpdate begins the update job on the agent (stop → app_update → start).
+func (c *AgentClient) StartUpdate(ctx context.Context) (*Job, error) {
+	var job Job
+	if err := c.do(ctx, http.MethodPost, "/api/v1/server/update", nil, &job); err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
 // PlayerLoadout is the agent-side loadout for one steamid.
 type PlayerLoadout struct {
 	KnifeT      string            `json:"knife_t"`

@@ -58,6 +58,12 @@ type fakeAgent struct {
 	// wpInstalled marks weaponpaints installed in the plugins body, which is
 	// what gates the Loadout tab and routes.
 	wpInstalled bool
+	// updateInfo overrides the /api/v1/server/update answer.
+	updateInfo string
+	// updateStarted counts POST /api/v1/server/update calls.
+	updateStarted int
+	// updateChecked counts POST /api/v1/server/update/check calls.
+	updateChecked int
 }
 
 func (f *fakeAgent) handler() http.Handler {
@@ -211,6 +217,41 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		f.wlEnabled = req.Enabled
 		f.mu.Unlock()
 		w.Write([]byte(`{"ok":true}`))
+	})
+	mux.HandleFunc("GET /api/v1/server/update", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		f.mu.Lock()
+		body := f.updateInfo
+		f.mu.Unlock()
+		if body == "" {
+			body = `{"installed_build":"100","latest_build":"100","available":false,"auto_update":true,"last_check":"2024-01-01T00:00:00Z"}`
+		}
+		w.Write([]byte(body))
+	})
+	mux.HandleFunc("POST /api/v1/server/update", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		f.mu.Lock()
+		f.updateStarted++
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte(`{"id":"job-u1","kind":"update","target":"cs2","label":"CS2 server","status":"running","step":"checking for an update"}`))
+	})
+	mux.HandleFunc("POST /api/v1/server/update/check", func(w http.ResponseWriter, r *http.Request) {
+		if !check(w, r) {
+			return
+		}
+		f.mu.Lock()
+		f.updateChecked++
+		body := f.updateInfo
+		f.mu.Unlock()
+		if body == "" {
+			body = `{"installed_build":"100","latest_build":"100","available":false,"auto_update":true,"last_check":"2024-01-01T00:00:00Z"}`
+		}
+		w.Write([]byte(body))
 	})
 	mux.HandleFunc("GET /api/v1/plugins", func(w http.ResponseWriter, r *http.Request) {
 		if !check(w, r) {
@@ -1705,6 +1746,99 @@ func TestLoadoutGatedOnPluginAndSteamID(t *testing.T) {
 	body = getBody(t, client, base+"/")
 	if strings.Contains(body, `href="/loadout"`) {
 		t.Fatal("nav must hide the Loadout tab for an account with no linked SteamID")
+	}
+}
+
+// The server page shows admins the CS2 build state and the update actions:
+// up to date, an available update (with the pending-players hold explained),
+// and the running job. Players see none of it.
+func TestServerPageUpdateCard(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	// default state: up to date
+	body := getBody(t, client, base+"/")
+	for _, want := range []string{"CS2 server update", "up to date", "build 100", "Check for update", "automatically when the server is empty"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("update card missing %q:\n%s", want, body[:min(2000, len(body))])
+		}
+	}
+	if strings.Contains(body, "Update now") {
+		t.Fatal("an up-to-date server must not offer Update now")
+	}
+
+	// update available, players online → held
+	fa.mu.Lock()
+	fa.updateInfo = `{"installed_build":"100","latest_build":"200","available":true,"available_since":"2024-01-01T00:00:00Z","pending_players":true,"auto_update":true,"last_check":"2024-01-01T00:00:00Z"}`
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/")
+	for _, want := range []string{"update available", "build 100", "build 200", "Update now", "Players are online", "client out of date"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("available-state card missing %q:\n%s", want, body[:min(2000, len(body))])
+		}
+	}
+
+	// check button reports the result
+	resp := postForm(t, client, base+"/do/server-update-check", nil)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("check: %d", resp.StatusCode)
+	}
+	flash := getBody(t, client, base+resp.Header.Get("Location"))
+	if !strings.Contains(flash, "100 → 200") {
+		t.Fatalf("check flash must name both builds:\n%s", flash[:min(1000, len(flash))])
+	}
+
+	// update button starts the job
+	resp = postForm(t, client, base+"/do/server-update", nil)
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("update: %d", resp.StatusCode)
+	}
+	fa.mu.Lock()
+	started := fa.updateStarted
+	checked := fa.updateChecked
+	fa.mu.Unlock()
+	if started != 1 || checked != 1 {
+		t.Fatalf("agent calls: update=%d check=%d", started, checked)
+	}
+
+	// updating state renders the running badge
+	fa.mu.Lock()
+	fa.updateInfo = `{"installed_build":"100","latest_build":"200","available":true,"pending_players":false,"updating":true,"auto_update":true}`
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/")
+	if !strings.Contains(body, ">updating<") {
+		t.Fatal("a running update must badge the card")
+	}
+	if strings.Contains(body, "Update now") {
+		t.Fatal("a running update must not offer a second Update now")
+	}
+
+	// a failed check surfaces its error
+	fa.mu.Lock()
+	fa.updateInfo = `{"installed_build":"100","last_error":"steamcmd timed out"}`
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/")
+	if !strings.Contains(body, "steamcmd timed out") {
+		t.Fatal("a failed check must be visible on the card")
+	}
+
+	// players never see the card
+	_ = postForm(t, client, base+"/users/create", url.Values{
+		"username": {"bob"}, "password": {"bobpass123"}, "role": {"player"},
+	})
+	pjar, _ := cookiejar.New(nil)
+	pclient := &http.Client{CheckRedirect: client.CheckRedirect, Jar: pjar}
+	loginAs(t, pclient, base, "bob", "bobpass123")
+	body = getBody(t, pclient, base+"/")
+	if strings.Contains(body, "CS2 server update") {
+		t.Fatal("players must not see the update card")
+	}
+
+	// and the actions are admin-only
+	if resp := postForm(t, pclient, base+"/do/server-update", nil); resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("player update POST must redirect to login, got %d", resp.StatusCode)
 	}
 }
 

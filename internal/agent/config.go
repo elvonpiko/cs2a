@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,13 @@ type Config struct {
 	// map the next server start launches. Panel map changes persist there so
 	// a restart does not fall back to the unit's built-in default.
 	MapEnvFile string `json:"map_env_file"`
+	// SteamCMDPath overrides where the updater finds steamcmd. Empty means
+	// auto-detect (PATH and the locations bootstrap.sh installs to).
+	SteamCMDPath string `json:"steamcmd_path,omitempty"`
+	// AutoUpdate lets the agent apply CS2 updates on its own (checked every
+	// few hours, applied only when the server is empty or offline). The
+	// panel's Update button works either way.
+	AutoUpdate bool `json:"auto_update"`
 
 	// path is where this config was loaded from, so corrections the agent
 	// works out at runtime (e.g. the real RCON address of an adopted server)
@@ -87,10 +95,31 @@ func LoadConfig(path string) (Config, error) {
 	if cfg.GitHubToken == "" {
 		cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
 	}
+	// json.Unmarshal over a zero Config leaves missing bools false, so a
+	// config written before auto_update existed reads as "off". Default it
+	// on: the check is cheap, anonymous, and the alternative is the client
+	// out-of-date lockout this feature exists to prevent.
+	if !cfg.AutoUpdate && !jsonHasAutoUpdate(cfg.path) {
+		cfg.AutoUpdate = true
+	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// jsonHasAutoUpdate reports whether the config file on disk contains an
+// explicit auto_update key (any value) — the difference between "the
+// operator turned it off" and "the file predates the setting".
+func jsonHasAutoUpdate(path string) bool {
+	if path == "" {
+		return false
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(b, []byte("auto_update"))
 }
 
 // Persist writes the config back to the file it was loaded from. Values the

@@ -38,12 +38,13 @@ Uninstall: `sudo bash scripts/uninstall.sh` (add `--purge` for config and data, 
 - One-click plugin catalog — Metamod:Source, CounterStrikeSharp, WeaponPaints, MatchZy, retakes, deathmatch, admin tools — always resolving the current upstream release, with a JSON config editor per plugin
 - Installs run as background jobs with a live progress bar (byte-accurate during downloads), so a 50 MB download cannot time out the request; finished installs update their cards without a reload
 - Server password and SteamID whitelist, applied live — no restart. Enforcement stays off until the list has someone on it, because an enforced empty whitelist locks out the operator too
+- CS2 server updates: the agent compares the installed build with Steam's and installs updates on its own when the server is empty or offline — so an updated client never hits "client out of date" for long. The Server page shows the builds, the auto-update state, and a manual Update now for when you don't want to wait
 - Panel accounts (admin/player) with an audit trail; failed sign-ins are throttled, expired sessions are swept, and signing out invalidates the token server-side
 
 **Players**
 - Server info, read-only
 - Map change (the one action they get)
-- Loadout: knife, gloves, agent and weapon skins per side, picked from image galleries and synced to the server per SteamID — like the official in-game loadout
+- Loadout: knife, gloves, agent and weapon skins per side, picked from image galleries and synced to the server per SteamID — like the official in-game loadout. The tab appears only when the admin installed WeaponPaints and the account has a linked SteamID: without either there is no loadout to manage
 
 ## How it fits together
 

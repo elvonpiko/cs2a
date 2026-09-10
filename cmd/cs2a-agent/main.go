@@ -86,7 +86,24 @@ func main() {
 	loadouts := agent.NewLoadoutStore(cfg, store)
 	defer loadouts.Close()
 
-	api := agent.NewAPI(cfg, srv, wh, inst, loadouts)
+	// The updater needs the live player count to honour "never kick anyone
+	// for an update": Status answers with the RCON view when the server is
+	// up, and zero when it is not (which is also a fine time to update).
+	updater := agent.NewUpdater(cfg, agent.NewSystemd(cfg.ServiceName), func() int {
+		st := srv.Status(context.Background())
+		if st.Rcon == nil {
+			return 0
+		}
+		return st.Rcon.Humans
+	})
+	api := agent.NewAPI(cfg, srv, wh, inst, loadouts).WithUpdater(updater)
+
+	// Background CS2 update check: every few hours, compare the installed
+	// build with Steam's and (with auto_update) apply it when the server is
+	// empty. Dies with the shutdown ctx below.
+	loopCtx, stopLoop := context.WithCancel(context.Background())
+	defer stopLoop()
+	go updater.RunAutoLoop(loopCtx)
 
 	listen := cfg.Listen
 	if listen == "" {
@@ -124,6 +141,7 @@ func main() {
 	select {
 	case sig := <-stop:
 		logger.Info("shutting down", "signal", sig.String())
+		stopLoop()
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(ctx)

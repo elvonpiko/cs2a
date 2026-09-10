@@ -103,6 +103,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /do/restart", s.admin(s.handleServerAction("restart")))
 	mux.HandleFunc("POST /do/rcon-repair", s.admin(s.handleRCONRepair))
 	mux.HandleFunc("POST /do/map", s.auth(s.handleMapChange))
+	mux.HandleFunc("POST /do/server-update", s.admin(s.handleServerUpdate))
+	mux.HandleFunc("POST /do/server-update-check", s.admin(s.handleServerUpdateCheck))
+	mux.HandleFunc("GET /partials/update-card", s.admin(s.handleUpdateCardPartial))
 
 	return s.logMiddleware(s.csrfMiddleware(mux))
 }

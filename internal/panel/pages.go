@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"cs2a/internal/cs2"
@@ -13,6 +14,24 @@ import (
 )
 
 // uptimeLabel renders seconds as "3d 4h", "2h 15m", "45s".
+// relTime renders a past time as "2h ago" style wording for the update card.
+func relTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
 func uptimeLabel(secs float64) string {
 	if secs <= 0 {
 		return "—"
@@ -122,6 +141,21 @@ func (s *Server) serverView(r *http.Request, u *User, polled bool) web.ServerVie
 	} else if st.Note != "" {
 		v.Note = st.Note
 	}
+	// The update card is admin-only; a player's server page never asks the
+	// agent about builds.
+	if v.IsAdmin {
+		if up, err := s.agent.Update(ctx); err == nil {
+			v.Update = updateViewFrom(up)
+		} else {
+			// Distinguish "agent too old" from "agent unreachable" — the
+			// first is upgrade advice, the second the panel's own problem
+			// banner.
+			var api *APIError
+			if errors.As(err, &api) && api.Status == http.StatusNotFound {
+				v.Update = &web.UpdateView{UpdaterMissing: true}
+			}
+		}
+	}
 	if polled {
 		return v
 	}
@@ -135,6 +169,24 @@ func (s *Server) serverView(r *http.Request, u *User, polled bool) web.ServerVie
 		if lines, err := s.agent.Logs(ctx, 40); err == nil {
 			v.LogLines = lines
 		}
+	}
+	return v
+}
+
+// updateViewFrom converts the agent's build comparison into the card's view.
+func updateViewFrom(up *UpdateInfo) *web.UpdateView {
+	v := &web.UpdateView{
+		Installed:      up.InstalledBuild,
+		Latest:         up.LatestBuild,
+		Available:      up.Available,
+		PendingPlayers: up.PendingPlayers,
+		Updating:       up.Updating,
+		AutoUpdate:     up.AutoUpdate,
+		LastCheckLabel: relTime(up.LastCheck),
+		CheckError:     up.LastError,
+	}
+	if up.Available && !up.AvailableSince.IsZero() {
+		v.AvailableLabel = relTime(up.AvailableSince)
 	}
 	return v
 }
@@ -228,6 +280,62 @@ func (s *Server) handleServerAction(action string) http.HandlerFunc {
 		}
 		redirectFlash(w, r, "/", "ok", msg)
 	}
+}
+
+// handleServerUpdate starts the CS2 update job on the agent: stop server →
+// steamcmd app_update → start. The POST redirects home; the update card (its
+// own 15 s poll) picks up the running job from status.
+func (s *Server) handleServerUpdate(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	if _, err := s.agent.StartUpdate(r.Context()); err != nil {
+		redirectFlash(w, r, "/", "err", "Update could not start: "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "server.update", "started")
+	redirectFlash(w, r, "/", "ok", "Updating the CS2 server — it stops, downloads the new build and comes back. The update card follows the progress.")
+}
+
+// handleServerUpdateCheck forces a fresh build comparison now. A check is
+// seconds (one steamcmd app_info round-trip), so the flash can carry the
+// answer itself.
+func (s *Server) handleServerUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	info, err := s.agent.CheckUpdate(r.Context())
+	if err != nil {
+		redirectFlash(w, r, "/", "err", "Update check failed: "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "server.update.check", "")
+	if info.Available {
+		redirectFlash(w, r, "/", "ok", "Update available: "+info.InstalledBuild+" → "+info.LatestBuild+". The update card has the details.")
+		return
+	}
+	if info.LastError != "" {
+		redirectFlash(w, r, "/", "err", "The check could not compare builds: "+info.LastError)
+		return
+	}
+	redirectFlash(w, r, "/", "ok", "The server is up to date (build "+info.InstalledBuild+").")
+}
+
+// handleUpdateCardPartial serves the polled update card.
+func (s *Server) handleUpdateCardPartial(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	v := web.ServerView{IsAdmin: true}
+	if up, err := s.agent.Update(r.Context()); err == nil {
+		v.Update = updateViewFrom(up)
+	} else {
+		var api *APIError
+		if errors.As(err, &api) && api.Status == http.StatusNotFound {
+			v.Update = &web.UpdateView{UpdaterMissing: true}
+		} else {
+			v.Update = &web.UpdateView{CheckError: err.Error()}
+		}
+	}
+	if err := web.UpdateCard(v).Render(r.Context(), w); err != nil {
+		s.log.Error("render update card", "err", err)
+		return
+	}
+	_ = u
 }
 
 // lastLogLine picks the most useful journal line for a one-line flash: the last
@@ -773,7 +881,6 @@ func (s *Server) handleAccessWhitelistAddUsers(w http.ResponseWriter, r *http.Re
 	}
 	s.appendWhitelist(w, r, u, ids, "access.whitelist.add", strings.Join(names, ", "))
 }
-
 
 // --- users -------------------------------------------------------------------
 

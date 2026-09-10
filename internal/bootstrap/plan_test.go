@@ -164,6 +164,11 @@ func TestAgentAndPanelConfigJSON(t *testing.T) {
 	if _, ok := agent["wp_dsn"]; ok {
 		t.Fatal("wp_dsn must be absent when unset")
 	}
+	// The file names its own switches: auto_update is on by default but an
+	// operator reading agent.json over SSH should see it.
+	if agent["auto_update"] != true {
+		t.Fatalf("auto_update must be written explicitly: %v", agent["auto_update"])
+	}
 
 	dsn := "cs2a:pw@tcp(127.0.0.1:3306)/cs2_wp"
 	raw, err = AgentConfig(p, "tok", "rcon", dsn)

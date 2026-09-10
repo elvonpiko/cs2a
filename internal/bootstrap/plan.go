@@ -311,6 +311,10 @@ func AgentConfig(p Plan, agentToken, rconPassword, wpDSN string) (string, error)
 		"db_path":       filepath.Join(p.InstallRoot, "var", "agent.db"),
 		"plugin_cache":  filepath.Join(p.InstallRoot, "cache", "plugins"),
 		"map_env_file":  filepath.Join(p.InstallRoot, "etc", "cs2a-map"),
+		// auto_update is written explicitly even though the agent defaults it
+		// on when the key is absent: a config file that names its own
+		// switches can be reasoned about from SSH.
+		"auto_update": true,
 	}
 	if wpDSN != "" {
 		cfg["wp_dsn"] = wpDSN

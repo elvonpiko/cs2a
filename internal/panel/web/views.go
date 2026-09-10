@@ -177,6 +177,37 @@ type ServerView struct {
 	// "killed by signal 11").
 	RestartCount  int
 	ExitCodeLabel string
+	// Update is the CS2 server build state, rendered by the admin-only
+	// update card. Nil means the agent has no updater (older agent) or was
+	// unreachable; the card hides rather than reporting a guess.
+	Update *UpdateView
+}
+
+// UpdateView is the panel-side view of the agent's build comparison.
+type UpdateView struct {
+	Installed string
+	Latest    string
+	Available bool
+	// AvailableLabel is "3 days" style since-when wording, "" when not available.
+	AvailableLabel string
+	PendingPlayers bool
+	Updating       bool
+	AutoUpdate     bool
+	// LastCheckLabel is "2 hours ago", "" when never checked.
+	LastCheckLabel string
+	// CheckError explains a failed check/update in operator terms.
+	CheckError string
+	// UpdaterMissing is true when the agent predates the updater; the card
+	// says why it cannot answer instead of showing an empty state.
+	UpdaterMissing bool
+}
+
+// BuildLabel renders a build id in operator terms ("build 16063831").
+func (u UpdateView) BuildLabel(b string) string {
+	if b == "" {
+		return "unknown"
+	}
+	return "build " + b
 }
 
 // PlayerRow is one online player line.
@@ -371,9 +402,9 @@ type AccessView struct {
 	// at the Plugins page; a greyed-out card that could not do anything was
 	// read as "installed but broken".
 	WhitelistInstalled bool
-	WhitelistActive     bool
-	WhitelistText       string
-	WhitelistCount      int
+	WhitelistActive    bool
+	WhitelistText      string
+	WhitelistCount     int
 	// WhitelistPlayers is the current list with per-entry panel-account names
 	// resolved where a linked SteamID matches, so the card shows who is on it
 	// rather than a bare textarea of ids.

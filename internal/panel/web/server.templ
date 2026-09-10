@@ -80,7 +80,97 @@ templ ServerPage(nav *NavUser, toast *Toast, v ServerView) {
 
 	if v.IsAdmin {
 		<div class="section-gap">
+			@UpdateCard(v)
+		</div>
+		<div class="section-gap">
 			@ServerLogs(v)
+		</div>
+	}
+}
+
+// UpdateCard is the admin-only CS2 build card: what is installed, what Steam
+// ships, and the actions around them. It swaps itself every 15 s — slower
+// than the status card, because builds change hourly, not per-second — and
+// stops polling while an update runs (the action's own page reload shows the
+// finished state).
+templ UpdateCard(v ServerView) {
+	if v.Update != nil {
+		<div
+			class="card"
+			id="update-card"
+			if !v.Update.Updating {
+				hx-get="/partials/update-card"
+				hx-trigger="every 15s"
+				hx-swap="outerHTML"
+			}
+		>
+			<div class="row between">
+				<h2>CS2 server update</h2>
+				if v.Update.Updating {
+					<span class="badge orange">updating</span>
+				} else if v.Update.Available {
+					<span class="badge orange">update available</span>
+				} else {
+					<span class="badge green">up to date</span>
+				}
+			</div>
+			if v.Update.Updating {
+				// The action POST redirects back here; the reload shows the
+				// finished job already in most cases, so this branch mostly
+				// covers an update started from another session.
+				<p class="sub">Stopping, downloading and restarting the server — this page refreshes itself.</p>
+			} else if v.Update.UpdaterMissing {
+				<p class="sub">This agent predates server updates. Update cs2a to manage the CS2 build from here.</p>
+			} else if v.Update.Available {
+				<p class="sub">
+					Steam ships { v.Update.BuildLabel(v.Update.Latest) }, this server runs { v.Update.BuildLabel(v.Update.Installed) }
+					if v.Update.AvailableLabel != "" {
+						{ " — known since " }{ v.Update.AvailableLabel }
+					}
+				</p>
+				<p class="sub">
+					Clients updated past the server get "client out of date" at the connect screen; installing the update fixes it.
+				</p>
+				if v.Update.PendingPlayers {
+					<div class="problem" role="status">
+						<p class="problem-text">Players are online — auto-update holds until the server is empty.</p>
+						<p class="problem-fix">Update now to apply it immediately (everyone is disconnected).</p>
+					</div>
+				}
+			} else if v.Update.CheckError != "" {
+				<p class="sub">Installed: { v.Update.BuildLabel(v.Update.Installed) }</p>
+				<div class="error-box">{ v.Update.CheckError }</div>
+			} else {
+				<p class="sub">Installed: { v.Update.BuildLabel(v.Update.Installed) }</p>
+				<p class="hint">
+					if v.Update.LastCheckLabel != "" {
+						Checked { v.Update.LastCheckLabel }
+					} else {
+						Not checked yet
+					}
+					if v.Update.AutoUpdate {
+						{ " — cs2a installs updates automatically when the server is empty or offline." }
+					} else {
+						{ " — automatic updates are off; only the button below installs them." }
+					}
+				</p>
+			}
+			if !v.Update.Updating && !v.Update.UpdaterMissing {
+				<div class="btn-row mt8">
+					if v.Update.Available {
+						<form method="post" action="/do/server-update" class="mt0">
+							<button
+								class="btn danger"
+								type="submit"
+								data-confirm="Update the CS2 server now? The server stops (dropping everyone), downloads the update and starts again — expect a few minutes offline."
+							>Update now</button>
+						</form>
+					}
+					<form method="post" action="/do/server-update-check" class="mt0">
+						<button class="btn ghost" type="submit">Check for update</button>
+					</form>
+				</div>
+			}
 		</div>
 	}
 }

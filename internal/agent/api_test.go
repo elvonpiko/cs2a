@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -658,5 +659,189 @@ func TestAPIMapChangePersistsForNextStart(t *testing.T) {
 	}
 	if w, _ := out["warning"].(string); w == "" {
 		t.Fatalf("workshop change must warn it will not survive a restart: %v", out)
+	}
+}
+
+// The update endpoints answer 404 without an updater, and with one they
+// report cached info, run a forced check, and start the update as a job.
+func TestUpdateEndpoints(t *testing.T) {
+	dir := t.TempDir()
+	manifestFor(t, dir, "100")
+	cfg := Config{Token: "tok", CS2Dir: dir, ServiceName: "cs2-server", DBPath: filepath.Join(t.TempDir(), "db.sqlite"), PluginCache: t.TempDir()}
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	svc := &fakeService{}
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), NewGHClient("")), lo)
+	ts := httptest.NewServer(api.Handler())
+	t.Cleanup(ts.Close)
+	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
+
+	// no updater → 404, in words a panel can render
+	resp, err := client.Get(ts.URL + "/api/v1/server/update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("without updater: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// attach a updater with a fake runner: checks succeed without steamcmd
+	u := NewUpdater(cfg, svc, nil)
+	u.run = func(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+		for _, a := range args {
+			if a == "+app_info_print" {
+				return `"730"
+{
+	"branches"
+	{
+		"public"
+		{
+			"buildid"		"200"
+		}
+	}
+}`, nil
+			}
+			if a == "+app_update" {
+				manifestFor(t, dir, "200")
+				return "Success! App '730' fully installed.", nil
+			}
+		}
+		return "", nil
+	}
+	api.WithUpdater(u)
+
+	// forced check reports the difference
+	resp, err = client.Post(ts.URL+"/api/v1/server/update/check", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var info UpdateInfo
+	json.NewDecoder(resp.Body).Decode(&info)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !info.Available || info.LatestBuild != "200" {
+		t.Fatalf("check: %d %+v", resp.StatusCode, info)
+	}
+
+	// cached info agrees without running steamcmd again
+	resp, err = client.Get(ts.URL + "/api/v1/server/update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached UpdateInfo
+	json.NewDecoder(resp.Body).Decode(&cached)
+	resp.Body.Close()
+	if !cached.Available || cached.LatestBuild != "200" {
+		t.Fatalf("cached: %+v", cached)
+	}
+
+	// update runs as a job and flips the state back to current
+	resp, err = client.Post(ts.URL+"/api/v1/server/update", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || job.Status != "running" {
+		t.Fatalf("update start: %d %+v", resp.StatusCode, job)
+	}
+	// the job runs in the background; wait for it to finish
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		j, ok := api.jobs.Get(job.ID)
+		if ok && j.Status == JobDone {
+			break
+		}
+		if ok && j.Status == JobFailed {
+			t.Fatalf("update job failed: %s", j.Message)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	j, _ := api.jobs.Get(job.ID)
+	if j.Status != JobDone {
+		t.Fatalf("update job did not finish: %+v", j)
+	}
+	// the service was offline (fakeService starts stopped): Run leaves it off
+	svc.mu.Lock()
+	ops := append([]string(nil), svc.ops...)
+	svc.mu.Unlock()
+	if len(ops) != 0 {
+		t.Fatalf("offline server must not be started by an update: %v", ops)
+	}
+	if got, _ := u.LocalBuildID(); got != "200" {
+		t.Fatalf("build after update job = %s", got)
+	}
+}
+
+// A server update and a plugin install/uninstall must never run together:
+// the update rewrites the game tree the installer is writing into. Either
+// side refuses while the other holds the lock.
+func TestUpdateAndPluginJobsExcludeEachOther(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Token: "tok", CS2Dir: dir, ServiceName: "cs2-server", DBPath: filepath.Join(t.TempDir(), "db.sqlite"), PluginCache: t.TempDir()}
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	svc := &fakeService{}
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	wh := NewWhitelist(cfg)
+	inst := NewInstaller(cfg, store, DefaultCatalog(), NewGHClient(""))
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, wh, inst, lo)
+	u := NewUpdater(cfg, svc, nil)
+	api.WithUpdater(u)
+	ts := httptest.NewServer(api.Handler())
+	t.Cleanup(ts.Close)
+	client := &http.Client{Transport: authTransport{base: http.DefaultTransport, token: cfg.Token}}
+
+	// an update "running" (flagged directly, as the running job would)
+	u.SetUpdating(true)
+	resp, err := client.Post(ts.URL+"/api/v1/plugins/metamod/install", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("install during update: %d, want 409", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/v1/plugins/metamod", nil)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("uninstall during update: %d, want 409", resp.StatusCode)
+	}
+
+	// an install job running → the update refuses
+	u.SetUpdating(false)
+	block := make(chan struct{})
+	job, err := api.jobs.Start("install", "metamod", "Metamod", func(ctx context.Context, progress func(Progress)) (*InstallResult, error) {
+		<-block
+		return &InstallResult{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close(block)
+	_ = job
+	resp, err = client.Post(ts.URL+"/api/v1/server/update", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("update during install: %d, want 409", resp.StatusCode)
 	}
 }
