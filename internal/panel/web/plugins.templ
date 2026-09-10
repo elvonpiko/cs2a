@@ -43,6 +43,13 @@ templ PluginCards(entries []PluginCardView, oob bool) {
 						<span class="badge grey">not installed</span>
 					}
 				</div>
+				if e.Recommended {
+					// Not a second class of plugin-hood: it says "cs2a builds
+					// UI on top of this one" — the loadout, the restrictive
+					// access card — which is what a fresh operator actually
+					// wants to know when picking.
+					<span class="badge blue">recommended</span>
+				}
 				<p>{ e.Description }</p>
 				if len(e.Requires) > 0 {
 					<div class="req">

@@ -263,7 +263,7 @@ func (f *fakeAgent) handlerWithRef(ref *fakeAgent) http.Handler {
 		if wp {
 			// same list with weaponpaints installed — the panel's Loadout
 			// gate keys on this
-			body = `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"],"installed":true},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime"}]}`
+			body = `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"],"recommended":true,"installed":true},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime","recommended":true}]}`
 		}
 		w.Write([]byte(body))
 	})
@@ -429,7 +429,7 @@ func newPanelTestWithJobs(t *testing.T, jobsBody string) (*http.Client, *fakeAge
 	t.Helper()
 	fa := &fakeAgent{
 		statusBody: fakeStatusRunning,
-		plugins:    `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"]},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime"}]}`,
+		plugins:    `{"plugins":[{"id":"weaponpaints","name":"WeaponPaints","description":"skins","kind":"plugin","requires":["cssharp"],"recommended":true},{"id":"metamod","name":"Metamod:Source","description":"loader","kind":"runtime","recommended":true}]}`,
 		jobsBody:   jobsBody,
 		// Existing tests predate the installed gate and expect the whitelist
 		// card to render; the "plugin missing" case opts out explicitly.
@@ -1839,6 +1839,31 @@ func TestServerPageUpdateCard(t *testing.T) {
 	// and the actions are admin-only
 	if resp := postForm(t, pclient, base+"/do/server-update", nil); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("player update POST must redirect to login, got %d", resp.StatusCode)
+	}
+}
+
+// Recommended plugins (the stack bootstrap offers) carry a badge, so a
+// fresh Plugins page shows which installs light up the Loadout tab and the
+// Access page's restrictive mode.
+func TestRecommendedPluginsBadged(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"}})
+	loginAs(t, client, base, "admin", "password123")
+
+	// default fake body: weaponpaints + metamod
+	body := getBody(t, client, base+"/plugins")
+	if strings.Count(body, ">recommended<") != 2 {
+		t.Fatalf("weaponpaints and metamod must both be badged:\n%s", body[:min(1500, len(body))])
+	}
+
+	// a catalog without recommended ids shows no badge
+	fa.mu.Lock()
+	fa.plugins = `{"plugins":[{"id":"matchzy","name":"MatchZy","description":"matches","kind":"plugin"}]}`
+	fa.mu.Unlock()
+	body = getBody(t, client, base+"/plugins")
+	if strings.Contains(body, ">recommended<") {
+		t.Fatal("a non-recommended catalog must not show the badge")
 	}
 }
 

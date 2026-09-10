@@ -71,6 +71,12 @@ type CatalogEntry struct {
 	// edit, if any.
 	ConfigPath string `json:"config_path,omitempty"`
 
+	// Recommended marks the components cs2a's own features build on
+	// (WeaponPaints powers the Loadout, cs2whitelist the Access page's
+	// restrictive mode). Bootstrap offers to install them all on a fresh
+	// server and the panel badges them, so "first-class" is visible without
+	// a second tier of plugin-hood.
+	Recommended bool `json:"recommended,omitempty"`
 	// Installed and InstalledVersion are runtime state filled in by
 	// Installer.Catalog. They are typed fields rather than an annotation
 	// spliced into Description: the panel used to parse "[installed v1.2] …"
@@ -108,6 +114,7 @@ func DefaultCatalog() []CatalogEntry {
 	return []CatalogEntry{
 		{
 			ID:          "metamod",
+			Recommended: true,
 			Name:        "Metamod:Source",
 			Description: "Plugin loader for the Source 2 engine. Required by every other component.",
 			Author:      "AlliedModders",
@@ -135,6 +142,7 @@ func DefaultCatalog() []CatalogEntry {
 		},
 		{
 			ID:          "cssharp",
+			Recommended: true,
 			Name:        "CounterStrikeSharp",
 			Description: "The dominant CS2 plugin runtime (C#). Required by all cssharp-based plugins. The with-runtime build bundles .NET, so nothing else has to be installed.",
 			Author:      "roflmuffin",
@@ -202,6 +210,7 @@ func DefaultCatalog() []CatalogEntry {
 		},
 		{
 			ID:          "weaponpaints",
+			Recommended: true,
 			Name:        "WeaponPaints",
 			Description: "Player-selected weapon, knife, glove and agent skins applied server-side. Backed by a MySQL database — cs2a writes players' loadout choices straight into it.",
 			Author:      "Nereziel",
@@ -232,6 +241,7 @@ func DefaultCatalog() []CatalogEntry {
 		},
 		{
 			ID:          "cs2whitelist",
+			Recommended: true,
 			Name:        "CS2 Whitelist",
 			Description: "Restrict server access to whitelisted SteamIDs, IPs or Steam groups (Metamod plugin). cs2a manages the whitelist file and its on/off switch from the Access page.",
 			Author:      "FemboyKZ",

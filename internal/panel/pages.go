@@ -461,6 +461,7 @@ func pluginCardViews(entries []PluginEntry) []web.PluginCardView {
 			Installed:   e.Installed,
 			Version:     e.InstalledVersion,
 			RequiredBy:  e.RequiredBy,
+			Recommended: e.Recommended,
 		})
 	}
 	return out

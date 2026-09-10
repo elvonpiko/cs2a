@@ -374,6 +374,7 @@ type PluginEntry struct {
 	// ConfigPath is non-empty when the plugin has a config file the panel can
 	// edit. Every card used to advertise a config editor unconditionally.
 	ConfigPath       string `json:"config_path"`
+	Recommended      bool   `json:"recommended"`
 	Installed        bool   `json:"installed"`
 	InstalledVersion string `json:"installed_version"`
 	// RequiredBy names installed components that depend on this one; while it

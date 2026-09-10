@@ -16,9 +16,15 @@
 #    sudo bash bootstrap.sh --unattended      # no questions, all defaults
 #    sudo bash bootstrap.sh --domain cs.gg    # panel behind Caddy + HTTPS
 #    sudo bash bootstrap.sh --no-cs2          # never install the game server
+#    sudo bash bootstrap.sh --vanilla         # skip the recommended plugins
 #
 #  Options:
 #    --unattended            accept every default, never prompt
+#    --vanilla               skip the recommended plugin stack: no Metamod,
+#                            CounterStrikeSharp, WeaponPaints or whitelist —
+#                            a pure Valve server (loadout skins and
+#                            restrictive access come back by installing them
+#                            from the panel later)
 #    --domain <host>         serve the panel over HTTPS via Caddy
 #    --no-cs2                do not install CS2 even if none is found
 #    --with-cs2              install CS2 even in --unattended mode
@@ -60,6 +66,7 @@ SETUP_ADMIN="${CS2A_ADMIN_USER:-admin}"
 UNATTENDED=0
 WITH_CS2=-1        # -1 = decide from discovery, 0 = never, 1 = always
 SETUP_SKIN_DB=-1   # -1 = ask, 0 = no, 1 = yes
+SETUP_PLUGINS=-1   # -1 = ask, 0 = vanilla, 1 = recommended stack
 TOUCH_FIREWALL=1
 # PANEL_LOCAL_ONLY binds the panel to loopback even without a domain, for
 # operators who reach it through an SSH tunnel instead of exposing plain HTTP.
@@ -81,6 +88,8 @@ need_val() { # need_val <flag> <count> <value>
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --unattended)  UNATTENDED=1 ;;
+    --vanilla)     SETUP_PLUGINS=0 ;;
+    --plugins)     SETUP_PLUGINS=1 ;;
     --no-cs2)      WITH_CS2=0 ;;
     --with-cs2)    WITH_CS2=1 ;;
     --skin-db)     SETUP_SKIN_DB=1 ;;
@@ -810,6 +819,21 @@ if [[ $SETUP_SKIN_DB -eq -1 ]]; then
   fi
 fi
 
+# The recommended stack: the four components cs2a's own features build on.
+# Default yes because a fresh server with none of them has a Loadout tab and
+# an Access card that cannot exist — the panel feels gutted. --vanilla (or a
+# "no") keeps the server pure; everything installs from the panel later, and
+# the agent queues the stack on its first boot so the panel can watch it.
+if [[ $SETUP_PLUGINS -eq -1 ]]; then
+  if [[ $UNATTENDED -eq 1 ]]; then
+    SETUP_PLUGINS=1
+  elif ask_yn "Install the recommended plugin stack? (Metamod, CounterStrikeSharp, WeaponPaints, CS2 Whitelist — enables loadout skins and restrictive access)" y; then
+    SETUP_PLUGINS=1
+  else
+    SETUP_PLUGINS=0
+  fi
+fi
+
 PANEL_URL="http://${PUBLIC_IP:-127.0.0.1}:$CS2A_PANEL_PORT"
 [[ -n $PANEL_DOMAIN ]] && PANEL_URL="https://$PANEL_DOMAIN"
 
@@ -833,6 +857,7 @@ cat <<PLAN
     agent        : 127.0.0.1:$CS2A_AGENT_PORT (loopback only, bearer token)
     panel        : $PANEL_URL $([[ $PANEL_BIND == 127.0.0.1 ]] && echo "(bound to loopback)" || echo "(bound to all interfaces)")
     skin sync    : $([[ $SETUP_SKIN_DB -eq 1 ]] && echo "MariaDB will be provisioned" || { [[ -n $WP_DSN ]] && echo "already configured" || echo "off"; })
+    plugins      : $([[ $SETUP_PLUGINS -eq 1 ]] && echo "recommended stack on first agent boot (Metamod, CSSharp, WeaponPaints, Whitelist)" || echo "vanilla — install from the panel later")
     firewall     : $([[ $TOUCH_FIREWALL -eq 1 && $HAVE_UFW -eq 1 ]] && echo "ufw rules for the ports above" || echo "not touched")
 PLAN
 if [[ -z $PANEL_DOMAIN && $PANEL_BIND != 127.0.0.1 ]]; then
@@ -1171,6 +1196,10 @@ if [[ -n $CS2A_CONNECT_ADDR ]]; then
 fi
 [[ -n $WP_DSN ]] && AGENT_JSON+=",
   \"wp_dsn\": $(json_str "$WP_DSN")"
+if [[ $SETUP_PLUGINS -eq 1 ]]; then
+  AGENT_JSON+=",
+  \"pending_plugins\": [\"metamod\", \"cssharp\", \"weaponpaints\", \"cs2whitelist\"]"
+fi
 AGENT_JSON+="
 }
 "

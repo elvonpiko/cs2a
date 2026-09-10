@@ -845,3 +845,93 @@ func TestUpdateAndPluginJobsExcludeEachOther(t *testing.T) {
 		t.Fatalf("update during install: %d, want 409", resp.StatusCode)
 	}
 }
+
+// InstallPending turns bootstrap's recommended-stack list into sequential
+// install jobs, skips what is already installed, and reports exactly the ids
+// that failed back to the caller so they stay pending.
+func TestInstallPendingRunsStackAndReportsFailures(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Token: "tok", CS2Dir: dir, ServiceName: "cs2-server",
+		DBPath: filepath.Join(t.TempDir(), "db.sqlite"), PluginCache: t.TempDir()}
+	store, err := OpenStore(cfg.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	svc := &fakeService{}
+	srv := &Server{cfg: cfg, sysd: svc, store: store}
+	wh := NewWhitelist(cfg)
+
+	// offlineTransport on the GH client: every "download" fails, so the
+	// jobs fail without hitting the network — exactly the failure path the
+	// done-callback must report.
+	gh := NewGHClient("")
+	gh.HTTP.Transport = offlineTransport{}
+	inst := NewInstaller(cfg, store, DefaultCatalog(), gh)
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, wh, inst, lo)
+
+	// one id already installed: must be skipped entirely
+	if err := store.SetPluginState(PluginState{Name: "metamod", Version: "v1", Status: "installed"}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan []string, 1)
+	known := api.InstallPending([]string{"metamod", "cssharp", "madeup-plugin"}, func(failed []string) {
+		done <- failed
+	})
+	// madeup-plugin is not in the catalog: dropped from known
+	if len(known) != 1 || known[0] != "cssharp" {
+		t.Fatalf("known = %v (metamod installed must be skipped, madeup dropped)", known)
+	}
+
+	select {
+	case failed := <-done:
+		// cssharp's download could not run offline → it failed → stays pending
+		if len(failed) != 1 || failed[0] != "cssharp" {
+			t.Fatalf("failed = %v, want [cssharp]", failed)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("InstallPending never called done")
+	}
+
+	// the failed id was actually run as a job the panel could watch
+	jobs := api.jobs.List()
+	found := false
+	for _, j := range jobs {
+		if j.Target == "cssharp" && j.Status == JobFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("cssharp must have a failed job the panel can show, jobs = %+v", jobs)
+	}
+}
+
+// An empty or fully-installed pending list starts nothing and still calls
+// done — main's clearing goroutine must not hang on a no-op boot.
+func TestInstallPendingNoopCallsDone(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Token: "tok", CS2Dir: dir, ServiceName: "cs2-server",
+		DBPath: filepath.Join(t.TempDir(), "db.sqlite"), PluginCache: t.TempDir()}
+	store, _ := OpenStore(cfg.DBPath)
+	t.Cleanup(func() { store.Close() })
+	srv := &Server{cfg: cfg, sysd: &fakeService{}, store: store}
+	lo := NewLoadoutStore(cfg, store)
+	t.Cleanup(lo.Close)
+	api := NewAPI(cfg, srv, NewWhitelist(cfg), NewInstaller(cfg, store, DefaultCatalog(), NewGHClient("")), lo)
+
+	done := make(chan []string, 1)
+	if known := api.InstallPending(nil, func(failed []string) { done <- failed }); known != nil {
+		t.Fatalf("known = %v, want nil", known)
+	}
+	select {
+	case failed := <-done:
+		if failed != nil {
+			t.Fatalf("failed = %v, want nil", failed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("noop InstallPending must call done")
+	}
+}

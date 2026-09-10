@@ -264,6 +264,10 @@ type PluginCardView struct {
 	Version     string
 	HasConfig   bool
 	Requires    []string
+	// Recommended marks the components cs2a's own features build on; the
+	// card badges them so a fresh Plugins page explains which installs
+	// light up the Loadout tab and the Access page's restrictive mode.
+	Recommended bool
 	// RequiredBy names installed plugins that depend on this one. While it is
 	// non-empty the card explains that instead of offering Uninstall, which
 	// used to remove Metamod out from under everything else.

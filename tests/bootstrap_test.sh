@@ -155,6 +155,47 @@ else
 fi
 
 echo
+echo "== recommended plugin stack =="
+# --vanilla and --plugins set the stack choice; the pending list reaches
+# agent.json exactly when the stack was chosen.
+check "bootstrap knows --vanilla"       grep -q -- "--vanilla)" scripts/bootstrap.sh
+check "bootstrap knows --plugins"        grep -q -- "--plugins)" scripts/bootstrap.sh
+check "pending_plugins written for the stack" \
+  grep -q 'pending_plugins\\": \[\\\"metamod\\\"' scripts/bootstrap.sh
+check "vanilla flow documented in --help" \
+  grep -q -- "--vanilla               skip the recommended plugin stack" scripts/bootstrap.sh
+# The question defaults to yes: a fresh server should have the Loadout and
+# restrictive-access features, not a gutted panel.
+check "stack question defaults to yes" \
+  grep -q "enables loadout skins and restrictive access)" scripts/bootstrap.sh
+# The agent.json fragment must parse as JSON when embedded: simulate the
+# builder around the plugins key the same way gen_agent_json does for dsn.
+if command -v python3 >/dev/null 2>&1; then
+  PENDING='{
+  "listen": "127.0.0.1:8100",
+  "token": "t",
+  "cs2_dir": "/opt/cs2a/cs2",
+  "service_name": "cs2-server",
+  "rcon_addr": "127.0.0.1:27015",
+  "rcon_password": "p",
+  "a2s_addr": "127.0.0.1:27015",
+  "db_path": "/opt/cs2a/var/agent.db",
+  "plugin_cache": "/opt/cs2a/cache/plugins",
+  "auto_update": true,
+  "pending_plugins": ["metamod", "cssharp", "weaponpaints", "cs2whitelist"]
+}'
+  if printf '%s' "$PENDING" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+ok = d["pending_plugins"] == ["metamod", "cssharp", "weaponpaints", "cs2whitelist"] and d["auto_update"] is True
+sys.exit(0 if ok else 1)'; then
+    echo "  ok  pending_plugins JSON shape parses"
+  else
+    echo "FAIL  pending_plugins JSON shape parses"
+    FAILED=1
+  fi
+fi
+
+echo
 echo "== auto discovery =="
 FAKE=$(mktemp -d)
 mkdir -p "$FAKE/cs2/game/csgo/cfg" "$FAKE/units"

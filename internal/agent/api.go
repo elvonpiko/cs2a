@@ -39,6 +39,77 @@ func (a *API) WithUpdater(u *Updater) *API {
 	return a
 }
 
+// InstallPending enqueues bootstrap's "recommended stack" as install jobs,
+// started sequentially from one background driver so a dependency is fully
+// on disk before its dependent begins (the installer would resolve deps
+// itself, but then the Plugins page shows one giant job instead of the
+// operator's own choice walking down the list).
+//
+// It returns the ids it recognized (unknown ids are dropped: a bootstrap this
+// build predates could not install them anyway) and returns immediately; the
+// driver runs on and calls done exactly once with the ids that did NOT
+// install, so the caller can keep exactly those pending in the config. A
+// Valve update day that breaks an upstream release is retried by the next
+// boot instead of being silently forgotten.
+func (a *API) InstallPending(ids []string, done func(failed []string)) []string {
+	// Already-installed ids are skipped: a bootstrap rerun re-offers the
+	// stack, and reinstalling what is on disk would churn the game tree for
+	// nothing (and race whatever the operator is doing from the panel).
+	var known []string
+	for _, id := range ids {
+		if _, ok := Find(a.inst.catalog, id); !ok {
+			continue
+		}
+		if a.inst.IsInstalled(id) {
+			continue
+		}
+		known = append(known, id)
+	}
+	if len(known) == 0 {
+		if done != nil {
+			done(nil)
+		}
+		return nil
+	}
+	go func() {
+		var failed []string
+		defer func() {
+			if done != nil {
+				done(failed)
+			}
+		}()
+		for _, id := range known {
+			entry, _ := Find(a.inst.catalog, id)
+			job, err := a.jobs.Start("install", id, entry.Name, func(ctx context.Context, prog func(Progress)) (*InstallResult, error) {
+				res, err := a.inst.InstallProgress(ctx, id, false, prog)
+				if err != nil {
+					return nil, err
+				}
+				return &res, nil
+			})
+			if err != nil {
+				// Target busy: a panel install won the race and is doing the
+				// work; count it as handled either way.
+				continue
+			}
+			// Drain this job before starting the next: installs share the
+			// game tree, and a failed root dependency should fail its
+			// dependents in their own jobs rather than overlap with them.
+			for {
+				j, ok := a.jobs.Get(job.ID)
+				if !ok || j.Status != JobRunning {
+					break
+				}
+				time.Sleep(250 * time.Millisecond)
+			}
+			if j, ok := a.jobs.Get(job.ID); ok && j.Status != JobDone {
+				failed = append(failed, id)
+			}
+		}
+	}()
+	return known
+}
+
 // Handler builds the agent's http.Handler.
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()

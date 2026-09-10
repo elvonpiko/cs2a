@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -104,6 +105,32 @@ func main() {
 	loopCtx, stopLoop := context.WithCancel(context.Background())
 	defer stopLoop()
 	go updater.RunAutoLoop(loopCtx)
+
+	// Bootstrap's recommended plugin stack, if the operator chose it: the
+	// agent queues the installs as jobs the panel can watch, and clears the
+	// key once they are done. A failed install keeps its id pending, so the
+	// next boot retries it (a Valve update day that broke an upstream release
+	// is exactly when this matters). A boot without a pending list — the
+	// common case from the second boot on — does nothing at all, and in
+	// particular does not rewrite the config file.
+	if len(cfg.PendingPlugins) > 0 {
+		known := api.InstallPending(cfg.PendingPlugins, func(failed []string) {
+			// Queue drained: drop the installed ids from the config so a
+			// later boot does not reinstall them; keep the failed ones
+			// pending so the next boot retries exactly those.
+			if len(failed) == len(cfg.PendingPlugins) && len(failed) > 0 {
+				// nothing succeeded — leave the file untouched
+				return
+			}
+			cfg.PendingPlugins = failed
+			if err := cfg.Persist(); err != nil {
+				logger.Error("update pending plugins", "err", err)
+			}
+		})
+		if len(known) > 0 {
+			logger.Info("installing bootstrap plugin stack", "plugins", strings.Join(known, ", "))
+		}
+	}
 
 	listen := cfg.Listen
 	if listen == "" {

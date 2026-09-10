@@ -40,6 +40,11 @@ type Config struct {
 	// few hours, applied only when the server is empty or offline). The
 	// panel's Update button works either way.
 	AutoUpdate bool `json:"auto_update"`
+	// PendingPlugins is bootstrap's "install the recommended stack" choice:
+	// the catalog ids the agent installs on its next (or first) boot, then
+	// clears from the file. The panel's Plugins page shows the jobs as they
+	// run, exactly like an install started there.
+	PendingPlugins []string `json:"pending_plugins,omitempty"`
 
 	// path is where this config was loaded from, so corrections the agent
 	// works out at runtime (e.g. the real RCON address of an adopted server)
