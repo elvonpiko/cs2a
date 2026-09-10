@@ -42,7 +42,9 @@ jobs:
         run: |
           mkdir -p public/img
           cp site/index.html public/
-          cp site/img/*.jpg public/img/
+          cp site/robots.txt site/sitemap.xml public/
+          cp site/img/server.jpg site/img/loadout.jpg public/img/
+          cp site/img/*.webp public/img/
           cp scripts/install.sh public/
           cp scripts/bootstrap.sh public/
 

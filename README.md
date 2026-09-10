@@ -6,18 +6,14 @@
 
 # cs2a
 
-**A Counter-Strike 2 server manager that stays out of the way.**
+**A simple, self-hosted Counter-Strike 2 server manager.**
 
-Web panel for admins and players, plus a small agent on the VPS.
-Two Go binaries, SQLite, no containers, no runtime.
+One command installs it. It sets up the server, manages maps,
+plugins and updates, and gives players a loadout page — through a web panel.
 
 [![install](https://img.shields.io/badge/curl-fsSL_…_&#124;_sudo_bash-48e0b0?label=%20%20install%20via&labelColor=0d1117)](https://elvonpiko.github.io/cs2a/)
-&nbsp;
 [![release](https://img.shields.io/github/v/release/elvonpiko/cs2a?label=release&color=8fb0e8&labelColor=0d1117)](../../releases)
-&nbsp;
 ![platform](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-57606f?labelColor=0d1117)
-&nbsp;
-![license](https://img.shields.io/badge/license-MIT-57606f?labelColor=0d1117)
 
 </div>
 
@@ -25,15 +21,15 @@ Two Go binaries, SQLite, no containers, no runtime.
 
 <table>
 <tr>
-<td width="50%" align="center"><sub><b>The server page</b> — live status, players, the update card</sub></td>
-<td width="50%" align="center"><sub><b>The loadout picker</b> — skins per player, per side</sub></td>
+<td width="50%" align="center"><sub><b>Server</b> — live status, players, updates</sub></td>
+<td width="50%" align="center"><sub><b>Loadout</b> — skins per player, per side</sub></td>
 </tr>
 <tr>
 <td><img src="docs/img/server.png" alt="The cs2a server page: running server, three players online, a pending CS2 update held until the server empties"></td>
 <td><img src="docs/img/loadout.png" alt="The cs2a loadout page: weapon skin galleries per side, picked from real game images"></td>
 </tr>
 <tr>
-<td align="center"><sub><b>The plugin catalog</b> — one click, current releases</sub></td>
+<td align="center"><sub><b>Plugins</b> — one click, current releases</sub></td>
 <td align="center"><sub><b>Access</b> — password plus a named whitelist</sub></td>
 </tr>
 <tr>
@@ -52,11 +48,7 @@ Fresh Ubuntu/Debian VPS, as root:
 curl -fsSL https://elvonpiko.github.io/cs2a/install.sh | sudo bash
 ```
 
-The installer discovers before it asks. It looks for SteamCMD, an existing CS2 install, its systemd unit, the game port, the address the unit binds, the account it runs as, the RCON password in `server.cfg`, Caddy and ufw — then installs and configures only what is missing. On a bare VPS that means SteamCMD, the CS2 server (~40 GB), the systemd units, firewall rules and the panel; on a machine that already runs CS2 it means the panel and agent alone, with your unit file left untouched.
-
-Adopting a running server is the case that gets the most care: the agent dials exactly the address your launch line binds (not an assumed `127.0.0.1`), writes files as the user your unit already runs as, and tells you when `-usercon` is missing — the one flag without which CS2 never opens its RCON port, so map changes and console commands cannot work. It offers to add that flag through a systemd drop-in, leaving your unit file byte-for-byte as you wrote it.
-
-Reruns are safe: the agent token, admin password, RCON password and skin-database credentials are reused rather than rotated.
+The installer discovers before it asks: SteamCMD, an existing CS2 install, its systemd unit, the game port, the RCON password, firewall — then installs only what is missing. A machine already running CS2 gets the panel and agent alone, with your unit file untouched (missing `-usercon` gets a drop-in fix, never an edit). Reruns are safe — existing credentials are reused, not rotated.
 
 ```sh
 sudo bash scripts/bootstrap.sh --no-cs2            # never install the game
@@ -134,4 +126,4 @@ tests/             shell tests for the installer
 
 ## Status
 
-Working MVP, a weekend-hobby project — use at your own risk. Both services currently run as root; see `docs/PLAN.md` for planned hardening and `docs/PLUGINS.md` for how the plugin stack works under the hood.
+In active development, and honest about it — things work but edges remain. Bug reports and issues are welcome ([open one](../../issues)); plain language and reproduction steps are plenty. See `docs/PLAN.md` for what's next and `docs/PLUGINS.md` for how the plugin stack works under the hood.

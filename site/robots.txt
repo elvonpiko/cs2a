@@ -1,0 +1,14 @@
+# cs2a — https://elvonpiko.github.io/cs2a/
+#
+# Fully open to every crawler, including the answer-engine bots
+# (OAI-SearchBot drives ChatGPT Search; the site wants to be quoted
+# there, so it is explicitly not blocked — blocking it is the only way
+# to be left out of those answers).
+
+User-agent: *
+Allow: /
+
+# install.sh and bootstrap.sh are shell scripts, not pages; nothing here
+# is a "result", so no exclusions at all.
+
+Sitemap: https://elvonpiko.github.io/cs2a/sitemap.xml
