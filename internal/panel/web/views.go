@@ -66,13 +66,17 @@ func ariaCurrent(active bool) string {
 	return "false"
 }
 
-// plural picks the singular or plural word for n.
+// plural picks the singular or plural word for n (used inside templates).
 func plural(n int, one, many string) string {
 	if n == 1 {
 		return one
 	}
 	return many
 }
+
+// Plural is the exported form for handlers building user-facing strings with
+// the same wording the templates use.
+func Plural(n int, one, many string) string { return plural(n, one, many) }
 
 // orDash renders an em dash for empty values so stat tiles never show a blank
 // gap (an offline server has no map, hostname or uptime).
@@ -116,7 +120,17 @@ func joinList(items []string) string {
 // count is spelled out rather than left to "are you sure?".
 func whitelistEnableWarning(count int) string {
 	return "Enforce the whitelist? Only the " + strconv.Itoa(count) + " listed " +
-		plural(count, "SteamID", "SteamIDs") + " will be able to join; everyone else is disconnected."
+		Plural(count, "SteamID", "SteamIDs") + " will be able to join; everyone else is disconnected."
+}
+
+// whitelistPlayerName names a whitelisted id in confirmations: the panel
+// account when there is one, "this player" otherwise (an id added by hand for
+// someone who never signed into the panel).
+func whitelistPlayerName(name string) string {
+	if name == "" {
+		return "this player"
+	}
+	return name
 }
 
 // ServerView is the view model for the server page (both roles).
@@ -351,18 +365,34 @@ type AccessView struct {
 	// card must not echo a secret back to whatever screen is open.
 	Password string
 	// WhitelistInstalled gates the whole whitelist card: the feature is a
-	// plugin, and describing "inactive — requires the CS2 Whitelist plugin"
-	// before it is even installed is noise. The plugins page is where the
-	// operator decides to want it.
+	// plugin, and the card is a management surface for files that only exist
+	// once it is installed. Before that, the only whitelist mention is one
+	// line in the summary strip ("needs the CS2 Whitelist plugin") pointing
+	// at the Plugins page; a greyed-out card that could not do anything was
+	// read as "installed but broken".
 	WhitelistInstalled bool
-	WhitelistActive    bool
-	WhitelistText      string
-	WhitelistCount     int
-	Users              []UserRow
+	WhitelistActive     bool
+	WhitelistText       string
+	WhitelistCount      int
+	// WhitelistPlayers is the current list with per-entry panel-account names
+	// resolved where a linked SteamID matches, so the card shows who is on it
+	// rather than a bare textarea of ids.
+	WhitelistPlayers []WhitelistPlayer
+	// AddableUsers are panel users with a linked SteamID who are not yet on
+	// the whitelist — the choices the "Add players" modal offers.
+	AddableUsers []UserRow
 	// CFGWarning explains a server.cfg cs2a can write to but not fully control
 	// — a second managed block overrides everything shown here, so the page must
 	// say so rather than presenting stale values as the truth.
 	CFGWarning string
+}
+
+// WhitelistPlayer is one allowed SteamID as the card lists it.
+type WhitelistPlayer struct {
+	SteamID string
+	// Name is the linked panel account's username, or "" when the id belongs
+	// to no panel user (a friend added by id, never given a panel account).
+	Name string
 }
 
 // AccessModeLabel names the effective access model for the summary strip:
@@ -371,9 +401,9 @@ type AccessView struct {
 func (v AccessView) AccessModeLabel() string {
 	switch {
 	case v.WhitelistActive && v.Password != "":
-		return "Whitelist + password"
+		return "Restrictive + password"
 	case v.WhitelistActive:
-		return "Whitelist only"
+		return "Restrictive only"
 	case v.Password != "":
 		return "Password only"
 	default:
@@ -389,9 +419,12 @@ func (v AccessView) AccessModeDetail() string {
 	case v.WhitelistActive:
 		return "Only the listed SteamIDs can connect — everyone else is rejected, password or not."
 	case v.Password != "":
-		return "Anyone who knows the password can connect. Panel users do not skip it: being a user here changes nothing in game."
+		return "Anyone who knows the password can connect; clients cache it after the first join."
 	default:
-		return "Anyone on the internet can connect. Set a password or enforce the whitelist to keep it private."
+		if v.WhitelistInstalled {
+			return "Anyone on the internet can connect. Set a password or enforce the whitelist to keep it private."
+		}
+		return "Anyone on the internet can connect. Set a password to keep it private — closing it entirely needs the CS2 Whitelist plugin (Plugins page)."
 	}
 }
 

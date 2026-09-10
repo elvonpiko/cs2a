@@ -223,6 +223,23 @@
 		});
 	}
 
+	// --- whitelist add-players dialog --------------------------------------
+	// The dialog is a native <dialog> rendered by the Access page; buttons
+	// carry data attributes so swapped regions need no rebinding.
+	document.body.addEventListener("click", function (e) {
+		var opener = e.target.closest("[data-wl-add]");
+		if (opener) {
+			var dlg = document.getElementById("wl-add-modal");
+			if (dlg && dlg.showModal) dlg.showModal();
+			return;
+		}
+		var closer = e.target.closest("[data-wl-close]");
+		if (closer) {
+			var dlg2 = document.getElementById("wl-add-modal");
+			if (dlg2 && dlg2.open) dlg2.close();
+		}
+	});
+
 	// --- copy buttons -----------------------------------------------------
 	// <button data-copy="value"> copies the value and flashes "copied".
 	// Delegated so buttons inside htmx-swapped regions work without rebinding.

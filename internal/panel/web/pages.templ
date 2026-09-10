@@ -101,9 +101,11 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 
 	// The two controls below are independent layers, and operators kept
 	// reading them as one feature: "I set a password, why can strangers
-	// join?" (client-cached password) and "I added a panel user, why were
-	// they rejected?" (panel users are not whitelist entries). One strip
-	// states the current mode and what actually gates a connection.
+	// join?". One strip states the current mode and what actually gates a
+	// connection. Panel accounts are deliberately not a layer here: they
+	// gate this web panel only, and that line lives on the Users page where
+	// the accounts are — stating it here made admins read "panel user" as an
+	// in-game access level.
 	<div class="card access-summary">
 		<div class="row between">
 			<h2>Who can join right now</h2>
@@ -115,17 +117,13 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 				<b>Password</b>
 				<span>Anyone with the password. Clients cache it after the first successful connect — the same player reconnects without typing it again, which looks like "no password needed".</span>
 			</div>
-			<div class={ "layer", templ.KV("on", v.WhitelistActive), templ.KV("off", v.WhitelistInstalled && !v.WhitelistActive) }>
-				<b>Whitelist</b>
+			<div class={ "layer", templ.KV("on", v.WhitelistActive), templ.KV("off", v.WhitelistInstalled && !v.WhitelistActive), templ.KV("na", !v.WhitelistInstalled) }>
+				<b>Restrictive access</b>
 				if v.WhitelistInstalled {
-					<span>Only the listed SteamIDs connect; everyone else is rejected at connect. Independent of the password — with both on, a listed player still needs the password too.</span>
+					<span>Closes the server entirely: only whitelisted SteamIDs can connect, everyone else is rejected at the door — even ones who know the password. Independent of the password: with both on, a listed player needs the password too.</span>
 				} else {
-					<span>Needs the CS2 Whitelist plugin (Plugins page). Without it there is no way to reject players outright — a password only filters who knows the secret.</span>
+					<span>Closes the server entirely — only whitelisted SteamIDs could connect. Needs the <a href="/plugins">CS2 Whitelist plugin</a> first; install it there and the management card appears on this page.</span>
 				}
-			</div>
-			<div class="layer">
-				<b>Panel users</b>
-				<span>Accounts here sign into this web panel only. They never grant or bypass in-game access — link a SteamID to a user for the loadout page, and whitelist that SteamID if they should always get in.</span>
 			</div>
 		</div>
 	</div>
@@ -161,14 +159,14 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 
 		if v.WhitelistInstalled {
 			<div class="card">
-				<h2>Whitelist</h2>
+				<h2>Restrictive access</h2>
 				<p class="sub">
 					if v.WhitelistActive {
 						<span class="badge orange">enforced</span>
 					} else {
 						<span class="badge grey">inactive</span>
 					}
-					SteamID allowlist — enforced by the CS2 Whitelist plugin
+					Only whitelisted SteamIDs connect — enforced by the CS2 Whitelist plugin
 				</p>
 				<div class="row between mt8">
 					<span class="faint">
@@ -207,28 +205,94 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 					</form>
 				</div>
 				<hr class="divider"/>
-				<form method="post" action="/access/whitelist" class="grow">
+				// The list of who is allowed, one row per player, with a remove
+				// button each. A textarea of raw SteamIDs made the admin decode
+				// 17-digit ids to answer "is my friend on the list?".
+				if len(v.WhitelistPlayers) == 0 {
+					<p class="hint">No one is whitelisted yet. Add players below — enforcement stays off until the list has an entry.</p>
+				} else {
+					<div class="scroll-y wl-list">
+						for _, p := range v.WhitelistPlayers {
+							<div class="wl-row">
+								<div class="wl-who">
+									if p.Name != "" {
+										<b>{ p.Name }</b>
+									} else {
+										<b class="faint">unlinked player</b>
+									}
+									<span class="mono faint">{ p.SteamID }</span>
+								</div>
+								<form method="post" action="/access/whitelist/remove" class="mt0">
+									<input type="hidden" name="steamid" value={ p.SteamID }/>
+									<button class="btn ghost sm" type="submit" data-confirm={ "Remove " + whitelistPlayerName(p.Name) + " from the whitelist? They can no longer connect." }>Remove</button>
+								</form>
+							</div>
+						}
+					</div>
+				}
+				// Raw-entry form for ids without panel accounts. Panel users are
+				// added from the modal below; this stays for the friend who will
+				// never sign into the panel.
+				<form method="post" action="/access/whitelist" class="grow mt8">
 					<label class="field">
-						<span>Allowed SteamIDs (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
-						<textarea name="steamids" rows="9" class="mono tall" spellcheck="false">{ v.WhitelistText }</textarea>
+						<span>Add SteamIDs directly (one per line — SteamID64, [U:1:x] or STEAM_1:y:z)</span>
+						<textarea name="steamids" rows="3" class="mono tall" spellcheck="false" placeholder={ "76561197960287930\n[U:1:1234567]" }></textarea>
 					</label>
 					<div class="card-foot">
 						<div class="btn-row">
-							<button class="btn primary" type="submit">Save whitelist</button>
-							<a class="btn ghost" href="/users">Pick from panel users</a>
+							<button class="btn primary" type="submit">Add SteamIDs</button>
 						</div>
-						<p class="hint">Entries are normalized to SteamID64. Enforcement is off until you switch it on — an empty enforced list locks everyone out.</p>
+						<p class="hint">Appends to the list — existing entries are kept. Entries are normalized to SteamID64.</p>
 					</div>
 				</form>
+				<div class="card-foot">
+					<div class="btn-row">
+						<button class="btn" type="button" data-wl-add>
+							Add players from panel users
+						</button>
+						<a class="btn ghost" href="/users">Manage accounts</a>
+					</div>
+					<p class="hint">Only panel users with a linked SteamID can be added this way — a player with no SteamID has nothing to whitelist.</p>
+				</div>
 			</div>
+			// The add-players modal: every panel user with a linked, not-yet-
+			// whitelisted SteamID as a checkbox. A native <dialog> keeps this
+			// dependency-free and styled by the panel's own CSS.
+			<dialog id="wl-add-modal" class="modal">
+				<form method="post" action="/access/whitelist/add-users">
+					<h3>Add players to the whitelist</h3>
+					if len(v.AddableUsers) == 0 {
+						<p class="sub">Every panel user with a linked SteamID is already whitelisted. Link a SteamID on the Users page to add more.</p>
+					} else {
+						<div class="scroll-y wl-picks">
+							for _, uu := range v.AddableUsers {
+								<label class="wl-pick">
+									<input type="checkbox" name="user_id" value={ fmtInt64(uu.ID) }/>
+									<span class="wl-who">
+										<b>{ uu.Username }</b>
+										<span class="mono faint">{ uu.SteamID }</span>
+									</span>
+								</label>
+							}
+						</div>
+					}
+					<div class="btn-row mt8">
+						if len(v.AddableUsers) > 0 {
+							<button class="btn primary" type="submit">Add selected</button>
+						}
+						<button class="btn ghost" type="button" data-wl-close>Cancel</button>
+					</div>
+				</form>
+			</dialog>
 		} else {
 			// The card is intentionally absent until the plugin exists; this
 			// placeholder keeps the grid from collapsing the password card to
 			// full width, which would make the layout jump when the plugin is
-			// installed.
+			// installed. It says what to do in one line and links there — it is
+			// a pointer, not a control surface.
 			<div class="card ghost-card">
-				<h2>Whitelist</h2>
-				<p class="sub">SteamID allowlist — enforced by the CS2 Whitelist plugin</p>
+				<h2>Restrictive access</h2>
+				<p class="sub">Only whitelisted SteamIDs connect</p>
 				<p class="faint">
 					Install the <a href="/plugins">CS2 Whitelist plugin</a> to manage who can join. Nothing is shown here until then.
 				</p>
@@ -236,40 +300,6 @@ templ AccessPage(nav *NavUser, toast *Toast, v AccessView) {
 		}
 	</div>
 
-	<div class="card section-gap">
-		<h2>Panel users</h2>
-		<p class="sub">Accounts that can sign into this panel</p>
-		<div class="scroll-y">
-		<table class="tbl">
-			<thead>
-				<tr><th>User</th><th>Role</th><th>SteamID64</th><th></th></tr>
-			</thead>
-			<tbody>
-				for _, u := range v.Users {
-					<tr>
-						<td>{ u.Username }</td>
-						<td><span class={ "role-badge", templ.KV("admin", u.Role == "admin"), templ.KV("player", u.Role != "admin") }>{ u.Role }</span></td>
-						<td class="mono">
-							if u.SteamID != "" {
-								{ u.SteamID }
-							} else {
-								<span class="faint">not linked</span>
-							}
-						</td>
-						<td class="right">
-							if u.SteamID != "" {
-								<form method="post" action="/access/whitelist/add-user" class="mt0">
-									<input type="hidden" name="user_id" value={ fmtInt64(u.ID) }/>
-									<button class="btn sm" type="submit">Add to whitelist</button>
-								</form>
-							}
-						</td>
-					</tr>
-				}
-			</tbody>
-		</table>
-		</div>
-	</div>
 }
 
 templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
@@ -277,9 +307,10 @@ templ UsersPage(nav *NavUser, toast *Toast, v UsersView, selfID int64) {
 		<h1>Users</h1>
 		<p>Panel accounts. Players sign in to see server info and manage their loadout.</p>
 		// Panel accounts are web-panel only: they never grant or gate in-game
-		// access. That line belongs here too, not just on the Access page,
-		// because this is the page where accounts are created.
-		<p class="hint">These accounts sign into this panel only — they do not affect who can join the game server (that is the Access page).</p>
+		// access. That line lives here — the page where accounts are created —
+		// because on the Access page it was read as "panel users are an access
+		// level of the server", which they are not.
+		<p class="hint">These accounts sign into this panel only — they do not affect who can join the game server (that is the Access page). Linking a SteamID lets a user manage their loadout and be added to the server whitelist, but never lets them connect by itself.</p>
 	</div>
 
 	if toast != nil && toast.Message != "" {

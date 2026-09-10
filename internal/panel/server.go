@@ -83,7 +83,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /access/password", s.admin(s.handleAccessPassword))
 	mux.HandleFunc("POST /access/whitelist", s.admin(s.handleAccessWhitelist))
 	mux.HandleFunc("POST /access/whitelist/toggle", s.admin(s.handleAccessWhitelistToggle))
-	mux.HandleFunc("POST /access/whitelist/add-user", s.admin(s.handleAccessWhitelistAddUser))
+	mux.HandleFunc("POST /access/whitelist/add-users", s.admin(s.handleAccessWhitelistAddUsers))
+	mux.HandleFunc("POST /access/whitelist/remove", s.admin(s.handleAccessWhitelistRemove))
 	mux.HandleFunc("GET /users", s.admin(s.handleUsersPage))
 	mux.HandleFunc("POST /users/create", s.admin(s.handleUserCreate))
 	mux.HandleFunc("POST /users/delete", s.admin(s.handleUserDelete))
@@ -412,7 +413,11 @@ func (s *Server) renderSetup(w http.ResponseWriter, errMsg string) {
 
 // --- helpers -------------------------------------------------------------
 
-// navUser builds the layout nav model for the current user.
+// navFor builds the layout nav model for the current user. The Loadout tab
+// is gated on both sides of the deal: the server must have WeaponPaints
+// installed (without it there is nothing to sync a loadout to) and the
+// account must have a linked SteamID (the loadout is stored per SteamID).
+// Missing either, the tab is absent — not a page that says "link your id".
 func navFor(u *User, active string) *web.NavUser {
 	if u == nil {
 		return nil

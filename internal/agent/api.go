@@ -487,13 +487,14 @@ func (a *API) handleGetWhitelist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// "installed" lets the access page show the whitelist card only when the
-	// feature exists on this server. A card that renders "inactive — requires
-	// the CS2 Whitelist plugin" from day one is just noise about a plugin the
-	// operator has not decided to want yet.
+	// feature exists on this server. The id is the catalog entry's ID, not the
+	// GitHub repo name: this used to query "mm-cs2whitelist" (the repo), which
+	// is never what Install records, so the access page kept telling an
+	// operator who had just installed the plugin that it was not installed.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"steamids":  ids,
 		"enabled":   enabled,
-		"installed": a.inst.IsInstalled("mm-cs2whitelist"),
+		"installed": a.inst.IsInstalled("cs2whitelist"),
 	})
 }
 

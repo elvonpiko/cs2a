@@ -537,10 +537,10 @@ func TestPanelRolesAndActions(t *testing.T) {
 		t.Fatalf("create player: %d", resp.StatusCode)
 	}
 
-	// whitelist the player from the access page
-	resp = postForm(t, client, base+"/access/whitelist/add-user", url.Values{"user_id": {"2"}})
+	// whitelist the player from the access page's add-players modal
+	resp = postForm(t, client, base+"/access/whitelist/add-users", url.Values{"user_id": {"2"}})
 	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("whitelist add-user: %d", resp.StatusCode)
+		t.Fatalf("whitelist add-users: %d", resp.StatusCode)
 	}
 	_ = resp
 	// the fake agent seeds one pre-existing entry; our user must be appended
@@ -1450,17 +1450,86 @@ func TestWhitelistCardHiddenUntilPluginInstalled(t *testing.T) {
 	if !strings.Contains(body, "/plugins") {
 		t.Fatal("the placeholder should point at the plugins page")
 	}
+	// The guide names the restrictive layer even without the plugin, so the
+	// admin learns the mode exists before it can be turned on.
+	if !strings.Contains(body, "Restrictive access") {
+		t.Fatal("the guide must name the restrictive layer")
+	}
 
-	// Once installed, the full card is back.
+	// Once installed, the full card is back: player list, add button, modal.
 	fa.mu.Lock()
 	fa.wlPluginInstalled = true
 	fa.mu.Unlock()
 	body = getBody(t, client, base+"/access")
-	if !strings.Contains(body, "Save whitelist") {
-		t.Fatal("the card must render once the plugin is installed")
+	if !strings.Contains(body, "wl-add-modal") {
+		t.Fatal("the add-players modal must render once the plugin is installed")
+	}
+	if !strings.Contains(body, "Add players from panel users") {
+		t.Fatal("the add-players button must render once the plugin is installed")
 	}
 	if strings.Contains(body, "ghost-card") {
 		t.Fatal("placeholder must be gone once the plugin is installed")
+	}
+}
+
+// The whitelist card must show who is on the list (linked panel names where
+// they exist), and removing one entry must remove exactly that entry.
+func TestWhitelistCardListsAndRemovesPlayers(t *testing.T) {
+	client, fa, base := newPanelTest(t)
+	fa.mu.Lock()
+	fa.wlPluginInstalled = true
+	fa.mu.Unlock()
+	_ = get(t, client, base+"/setup")
+	_ = postForm(t, client, base+"/setup", url.Values{
+		"token": {"setuptok"}, "username": {"admin"}, "password": {"password123"},
+		// the fake agent's GET seeds exactly this id when nothing was PUT yet
+		"steamid": {"76561197960287930"},
+	})
+	loginAs(t, client, base, "admin", "password123")
+
+	// a player with a linked id, not yet whitelisted
+	_ = postForm(t, client, base+"/users/create", url.Values{
+		"username": {"alice"}, "password": {"alicepass1"}, "role": {"player"}, "steamid": {"[U:1:1234567]"},
+	})
+
+	body := getBody(t, client, base+"/access")
+	// the seeded entry resolves to the admin's account name
+	if !strings.Contains(body, ">admin<") {
+		t.Fatalf("the card should name the linked panel user:\n%s", body[:min(1600, len(body))])
+	}
+	// the modal offers alice with her id, as a checkbox
+	if !strings.Contains(body, "alice") || !strings.Contains(body, "76561197961500295") {
+		t.Fatalf("the modal should offer alice (linked, not yet whitelisted):\n%s", body[:min(1600, len(body))])
+	}
+
+	// add alice through the modal; the panel appends her id
+	resp := postForm(t, client, base+"/access/whitelist/add-users", url.Values{"user_id": {"2"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add-users: %d", resp.StatusCode)
+	}
+	fa.mu.Lock()
+	got := append([]string(nil), fa.whitelist...)
+	fa.mu.Unlock()
+	if len(got) != 2 || got[1] != "76561197961500295" {
+		t.Fatalf("after add-users, whitelist = %v", got)
+	}
+
+	// after the save the page shows both as named rows
+	body = getBody(t, client, base+"/access")
+	if !strings.Contains(body, ">alice<") {
+		t.Fatal("alice should now be listed by name")
+	}
+
+	// removing the admin's id drops exactly that entry
+	resp = postForm(t, client, base+"/access/whitelist/remove", url.Values{"steamid": {"76561197960287930"}})
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("remove: %d", resp.StatusCode)
+	}
+	fa.mu.Lock()
+	got = append([]string(nil), fa.whitelist...)
+	fa.mu.Unlock()
+	if len(got) != 1 || got[0] != "76561197961500295" {
+		t.Fatalf("after remove, whitelist = %v", got)
 	}
 }
 
@@ -1645,20 +1714,27 @@ func TestAccessPageExplainsAccessModel(t *testing.T) {
 	body := getBody(t, client, base+"/access")
 	for _, want := range []string{
 		"Who can join right now",
-		"Whitelist + password",
+		"Restrictive + password",
 		"clients cache it",
-		"never grant or bypass in-game access",
 	} {
 		if !strings.Contains(strings.ToLower(body), strings.ToLower(want)) {
 			t.Fatalf("access page missing %q:\n%s", want, body[:min(1800, len(body))])
 		}
 	}
+	// the panel-users layer is gone from this page; its message lives on the
+	// Users page only
+	if strings.Contains(body, "Panel users</b>") || strings.Contains(body, "<b>Panel users") {
+		t.Fatal("the guide must not carry a panel-users layer anymore")
+	}
+	if strings.Contains(body, "never grant or bypass in-game access") {
+		t.Fatal("panel-account wording belongs on the Users page, not here")
+	}
 
-	// password cleared → whitelist-only wording
+	// password cleared → restrictive-only wording
 	_ = postForm(t, client, base+"/access/password", url.Values{"password": {""}})
 	body = getBody(t, client, base+"/access")
-	if !strings.Contains(body, "Whitelist only") {
-		t.Fatal("whitelist-only mode must be named after clearing the password")
+	if !strings.Contains(body, "Restrictive only") {
+		t.Fatal("restrictive-only mode must be named after clearing the password")
 	}
 
 	// whitelist off too → open to everyone

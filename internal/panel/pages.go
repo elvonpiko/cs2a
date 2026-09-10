@@ -531,26 +531,63 @@ func (s *Server) handleAccessPage(w http.ResponseWriter, r *http.Request) {
 	// Enforcement lives in the whitelist plugin's own config, not in a cvar.
 	// The card only exists once the plugin does: an "inactive — requires the
 	// CS2 Whitelist plugin" card from day one is noise on a fresh install.
+	var users []User
+	if list, err := s.store.ListUsers(); err == nil {
+		users = list
+	}
 	if st, err := s.agent.WhitelistState(r.Context()); err == nil {
 		v.WhitelistInstalled = st.Installed
 		if st.Installed {
 			v.WhitelistText = strings.Join(st.SteamIDs, "\n")
 			v.WhitelistActive = st.Enabled
 			v.WhitelistCount = len(st.SteamIDs)
-		}
-	}
-	if users, err := s.store.ListUsers(); err == nil {
-		for _, uu := range users {
-			v.Users = append(v.Users, web.UserRow{
-				ID: uu.ID, Username: uu.Username, Role: uu.Role, SteamID: uu.SteamID64,
-				Created: uu.CreatedAt.Format("2006-01-02"),
-			})
+			v.WhitelistPlayers = whitelistPlayerRows(st.SteamIDs, users)
+			v.AddableUsers = addableWhitelistUsers(users, st.SteamIDs)
 		}
 	}
 	comp := web.Base("Access", navFor(u, "access"), web.AccessPage(navFor(u, "access"), flash(r), v))
 	if err := comp.Render(r.Context(), w); err != nil {
 		s.log.Error("render access", "err", err)
 	}
+}
+
+// whitelistPlayerRows turns the raw SteamID list into rows the card can
+// show, resolving the linked panel account's username where one matches. A
+// bare textarea of ids made admins decode 17-digit numbers to answer "is my
+// friend on the list?".
+func whitelistPlayerRows(ids []string, users []User) []web.WhitelistPlayer {
+	bySteam := map[string]string{}
+	for _, uu := range users {
+		if uu.SteamID64 != "" {
+			bySteam[uu.SteamID64] = uu.Username
+		}
+	}
+	out := make([]web.WhitelistPlayer, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, web.WhitelistPlayer{SteamID: id, Name: bySteam[id]})
+	}
+	return out
+}
+
+// addableWhitelistUsers picks the panel users the add-players modal offers:
+// a linked SteamID is required (nothing to whitelist otherwise) and the id
+// must not already be on the list (adding a listed player again is noise).
+func addableWhitelistUsers(users []User, ids []string) []web.UserRow {
+	onList := map[string]bool{}
+	for _, id := range ids {
+		onList[id] = true
+	}
+	var out []web.UserRow
+	for _, uu := range users {
+		if uu.SteamID64 == "" || onList[uu.SteamID64] {
+			continue
+		}
+		out = append(out, web.UserRow{
+			ID: uu.ID, Username: uu.Username, Role: uu.Role, SteamID: uu.SteamID64,
+			Created: uu.CreatedAt.Format("2006-01-02"),
+		})
+	}
+	return out
 }
 
 // handleAccessWhitelistToggle switches whitelist enforcement on or off.
@@ -606,56 +643,132 @@ func (s *Server) handleAccessPassword(w http.ResponseWriter, r *http.Request) {
 	redirectFlash(w, r, "/access", "ok", "Server password "+detail+".")
 }
 
+// handleAccessWhitelist appends hand-entered SteamIDs to the list. The card's
+// textarea once replaced the whole list — one typo in a re-typed list removed
+// players silently. Appending can only add.
 func (s *Server) handleAccessWhitelist(w http.ResponseWriter, r *http.Request) {
 	u := userFromCtx(r)
 	raw := r.FormValue("steamids")
 	var ids []string
 	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
+		if line = strings.TrimSpace(line); line != "" {
 			ids = append(ids, line)
 		}
 	}
-	if err := s.agent.PutWhitelist(r.Context(), ids); err != nil {
-		redirectFlash(w, r, "/access", "err", "Whitelist save failed: "+err.Error())
+	if len(ids) == 0 {
+		redirectFlash(w, r, "/access", "err", "Nothing to add — enter at least one SteamID.")
 		return
 	}
-	s.store.Audit(u.Username, "access.whitelist", fmt.Sprintf("%d entries", len(ids)))
-	redirectFlash(w, r, "/access", "ok", "Whitelist saved (normalized to SteamID64).")
+	s.appendWhitelist(w, r, u, ids, "access.whitelist.add", fmt.Sprintf("%d entries", len(ids)))
 }
 
-func (s *Server) handleAccessWhitelistAddUser(w http.ResponseWriter, r *http.Request) {
-	u := userFromCtx(r)
-	idStr := r.FormValue("user_id")
-	var userID int64
-	if _, err := fmt.Sscanf(idStr, "%d", &userID); err != nil {
-		redirectFlash(w, r, "/access", "err", "Invalid user id.")
-		return
-	}
-	target, err := s.store.GetUserByID(userID)
-	if err != nil || target.SteamID64 == "" {
-		redirectFlash(w, r, "/access", "err", "User has no linked SteamID.")
-		return
-	}
-	ids, err := s.agent.Whitelist(r.Context())
+// appendWhitelist fetches the current list, appends the given ids, dedupes,
+// saves, audits and redirects. Shared by the hand-entry form and the
+// add-players modal; auditDetail describes the add for the audit log.
+func (s *Server) appendWhitelist(w http.ResponseWriter, r *http.Request, u *User, ids []string, auditAction, auditDetail string) {
+	current, err := s.agent.Whitelist(r.Context())
 	if err != nil {
 		redirectFlash(w, r, "/access", "err", err.Error())
 		return
 	}
+	seen := map[string]bool{}
+	for _, id := range current {
+		seen[id] = true
+	}
+	added := 0
+	merged := append([]string(nil), current...)
 	for _, id := range ids {
-		if id == target.SteamID64 {
-			redirectFlash(w, r, "/access", "ok", target.Username+" is already whitelisted.")
-			return
+		if !seen[id] {
+			seen[id] = true
+			merged = append(merged, id)
+			added++
 		}
 	}
-	ids = append(ids, target.SteamID64)
-	if err := s.agent.PutWhitelist(r.Context(), ids); err != nil {
+	if added == 0 {
+		redirectFlash(w, r, "/access", "ok", "Already on the whitelist — nothing to add.")
+		return
+	}
+	if err := s.agent.PutWhitelist(r.Context(), merged); err != nil {
 		redirectFlash(w, r, "/access", "err", "Whitelist save failed: "+err.Error())
 		return
 	}
-	s.store.Audit(u.Username, "access.whitelist.add", target.Username+" "+target.SteamID64)
-	redirectFlash(w, r, "/access", "ok", target.Username+" added to whitelist.")
+	s.store.Audit(u.Username, auditAction, auditDetail)
+	redirectFlash(w, r, "/access", "ok", fmt.Sprintf("Added %d %s (normalized to SteamID64).", added, web.Plural(added, "player", "players")))
 }
+
+// handleAccessWhitelistRemove takes one SteamID off the list. The agent's
+// Apply keeps the last non-empty guarantee (it refuses emptying an enforced
+// list), so removing the final entry with enforcement on surfaces as an
+// error rather than silently locking everyone out.
+func (s *Server) handleAccessWhitelistRemove(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	id := strings.TrimSpace(r.FormValue("steamid"))
+	if id == "" {
+		redirectFlash(w, r, "/access", "err", "No SteamID to remove.")
+		return
+	}
+	current, err := s.agent.Whitelist(r.Context())
+	if err != nil {
+		redirectFlash(w, r, "/access", "err", err.Error())
+		return
+	}
+	kept := make([]string, 0, len(current))
+	removed := false
+	for _, cur := range current {
+		if cur == id {
+			removed = true
+			continue
+		}
+		kept = append(kept, cur)
+	}
+	if !removed {
+		redirectFlash(w, r, "/access", "ok", "That SteamID was not on the whitelist.")
+		return
+	}
+	if err := s.agent.PutWhitelist(r.Context(), kept); err != nil {
+		redirectFlash(w, r, "/access", "err", "Whitelist save failed: "+err.Error())
+		return
+	}
+	s.store.Audit(u.Username, "access.whitelist.remove", id)
+	redirectFlash(w, r, "/access", "ok", "Removed from the whitelist.")
+}
+
+// handleAccessWhitelistAddUsers is the add-players modal's target: one or
+// many panel users, checked off in the dialog, appended by their linked
+// SteamIDs. The single-user handler this replaces did the same thing one
+// POST at a time.
+func (s *Server) handleAccessWhitelistAddUsers(w http.ResponseWriter, r *http.Request) {
+	u := userFromCtx(r)
+	if err := r.ParseForm(); err != nil {
+		redirectFlash(w, r, "/access", "err", "Bad form.")
+		return
+	}
+	idStrs := r.Form["user_id"]
+	if len(idStrs) == 0 {
+		redirectFlash(w, r, "/access", "err", "Pick at least one player.")
+		return
+	}
+	var ids []string
+	var names []string
+	for _, idStr := range idStrs {
+		var userID int64
+		if _, err := fmt.Sscanf(idStr, "%d", &userID); err != nil {
+			continue
+		}
+		target, err := s.store.GetUserByID(userID)
+		if err != nil || target.SteamID64 == "" {
+			continue
+		}
+		ids = append(ids, target.SteamID64)
+		names = append(names, target.Username)
+	}
+	if len(ids) == 0 {
+		redirectFlash(w, r, "/access", "err", "None of those users has a linked SteamID.")
+		return
+	}
+	s.appendWhitelist(w, r, u, ids, "access.whitelist.add", strings.Join(names, ", "))
+}
+
 
 // --- users -------------------------------------------------------------------
 

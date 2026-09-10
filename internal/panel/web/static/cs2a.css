@@ -689,6 +689,41 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .modal-actions .btn { min-width: 92px; }
 
+/* --- native dialog modal (whitelist add-players) -------------------------- */
+/* A <dialog> shown with showModal() gets ::backdrop for free; these rules
+   make it read as the same component as the JS confirm card. */
+dialog.modal {
+	border: 1px solid var(--line-strong); border-radius: 14px;
+	background: var(--surface); color: var(--ink);
+	width: min(460px, calc(100% - 32px));
+	padding: 22px; box-shadow: var(--pop);
+	margin: auto; /* centers in the viewport */
+}
+dialog.modal::backdrop {
+	background: rgba(6, 7, 9, 0.62); backdrop-filter: blur(5px);
+}
+dialog.modal h3 { margin: 0 0 6px; font-size: 16px; font-weight: 620; }
+dialog.modal .sub { margin-bottom: 14px; }
+
+.wl-picks { max-height: 300px; display: flex; flex-direction: column; gap: 6px; }
+.wl-pick {
+	display: flex; align-items: center; gap: 10px;
+	padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
+	cursor: pointer;
+}
+.wl-pick:hover { border-color: var(--line-strong); background: var(--raise); }
+.wl-pick input { accent-color: var(--signal); width: 16px; height: 16px; }
+
+/* --- whitelist player list ------------------------------------------------ */
+.wl-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px; }
+.wl-row {
+	display: flex; align-items: center; justify-content: space-between; gap: 10px;
+	padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px;
+}
+.wl-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wl-who b { font-size: 13.5px; font-weight: 620; }
+.wl-who .mono { font-size: 11.5px; }
+
 /* --- page entrance -------------------------------------------------------- */
 /* Top-level blocks of each page cascade in once per full render. */
 @keyframes pageRise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
@@ -712,7 +747,7 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 
 /* --- access model summary ---------------------------------------------------- */
 .access-summary { margin-bottom: 14px; }
-.access-layers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.access-layers { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 12px; }
 @media (max-width: 860px) { .access-layers { grid-template-columns: 1fr; } }
 .access-layers .layer {
 	padding: 10px 12px; border-radius: 10px;
@@ -724,6 +759,8 @@ table.tbl td.mono { font-family: var(--mono); font-size: 12.5px; }
 .access-layers .layer.on { border-color: var(--accent-line, rgba(72,224,176,.32)); }
 .access-layers .layer.on b { color: var(--accent, #48e0b0); }
 .access-layers .layer.off { opacity: .6; }
+/* Not applicable: the layer's feature is not on this server at all. */
+.access-layers .layer.na { border-style: dashed; opacity: .75; }
 
 /* --- connect address -------------------------------------------------------- */
 .addr-row { display: flex; align-items: center; gap: 8px; }
