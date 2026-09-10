@@ -1,7 +1,48 @@
+<div align="center">
+
+<a href="https://elvonpiko.github.io/cs2a/"><picture>
+<source media="(prefers-color-scheme: dark)" srcset="docs/img/favicon.svg">
+<img src="docs/img/favicon.svg" width="96" alt="cs2a reticle mark"></picture></a>
+
 # cs2a
 
-> A minimal Counter-Strike 2 server manager.
-> Web panel for admins and players, plus a small agent on the VPS. Two Go binaries, SQLite, no containers.
+**A Counter-Strike 2 server manager that stays out of the way.**
+
+Web panel for admins and players, plus a small agent on the VPS.
+Two Go binaries, SQLite, no containers, no runtime.
+
+[![install](https://img.shields.io/badge/curl-fsSL_…_&#124;_sudo_bash-48e0b0?label=%20%20install%20via&labelColor=0d1117)](https://elvonpiko.github.io/cs2a/)
+&nbsp;
+[![release](https://img.shields.io/github/v/release/elvonpiko/cs2a?label=release&color=8fb0e8&labelColor=0d1117)](../../releases)
+&nbsp;
+![platform](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-57606f?labelColor=0d1117)
+&nbsp;
+![license](https://img.shields.io/badge/license-MIT-57606f?labelColor=0d1117)
+
+</div>
+
+---
+
+<table>
+<tr>
+<td width="50%" align="center"><sub><b>The server page</b> — live status, players, the update card</sub></td>
+<td width="50%" align="center"><sub><b>The loadout picker</b> — skins per player, per side</sub></td>
+</tr>
+<tr>
+<td><img src="docs/img/server.png" alt="The cs2a server page: running server, three players online, a pending CS2 update held until the server empties"></td>
+<td><img src="docs/img/loadout.png" alt="The cs2a loadout page: weapon skin galleries per side, picked from real game images"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>The plugin catalog</b> — one click, current releases</sub></td>
+<td align="center"><sub><b>Access</b> — password plus a named whitelist</sub></td>
+</tr>
+<tr>
+<td><img src="docs/img/plugins.png" alt="The cs2a plugins page: Metamod, CounterStrikeSharp, WeaponPaints and the whitelist installed, badged recommended"></td>
+<td><img src="docs/img/access.png" alt="The cs2a access page: server password form and the whitelist card listing alice, bob and one unlinked player"></td>
+</tr>
+</table>
+
+---
 
 ## Install
 
@@ -30,8 +71,10 @@ Uninstall: `sudo bash scripts/uninstall.sh` (add `--purge` for config and data, 
 
 ## What you get
 
+*The four screenshots above are the real panel, captured from a demo server with three players online and a pending CS2 update — not mockups. `go run ./tools/cs2a-demo` boots the same UI locally.*
+
 **Admins**
-- Live server page — status, players, uptime, map preview; start/stop/restart with confirm dialogs; the log card tails a running server by itself (pausable, follows your scroll)
+- Live server page — status, players, uptime, map; start/stop/restart with confirm dialogs; the log card tails a running server by itself (pausable, follows your scroll)
 - Lifecycle actions that tell the truth: the agent waits for the unit to settle and brings back the journal tail when a start fails, instead of reporting success the moment `systemctl` exits
 - A diagnosed RCON problem instead of `connection refused`: the panel names the cause (wrong bind address, no `-usercon`, no boot-time password) and offers a one-click repair
 - Map changes that **keep everyone connected** (`changelevel`; only a restart drops players)
@@ -71,13 +114,21 @@ make build              # dist/cs2a-agent + dist/cs2a-panel
 bash tests/bootstrap_test.sh
 ```
 
+The screenshots in `docs/img` are the real panel, captured by Playwright against `tools/cs2a-demo` (the production panel serving a fake agent's demo state):
+
+```sh
+go run ./tools/cs2a-demo &                # demo panel on :8800 (admin / demo-password)
+node scripts/shots/capture.mjs docs/img    # needs: npm i playwright-core + its chromium
+```
+
 ```
 cmd/               panel + agent entrypoints
 internal/agent     runtime: RCON, A2S, systemd, plugins, jobs, cosmetics
 internal/panel     HTTP server, sessions, agent client, templ views
 internal/cs2       SteamIDs, status parsing, server.cfg managed blocks
 internal/bootstrap install plan, unit/config rendering, secret generation
-scripts/           bootstrap.sh installer, install.sh wrapper, uninstall.sh
+scripts/           bootstrap.sh installer, install.sh wrapper, uninstall.sh, shots/
+tools/             cs2a-demo: the real panel against a fake agent, for screenshots
 tests/             shell tests for the installer
 ```
 

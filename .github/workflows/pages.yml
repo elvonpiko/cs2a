@@ -40,8 +40,9 @@ jobs:
 
       - name: Assemble site
         run: |
-          mkdir -p public
+          mkdir -p public/img
           cp site/index.html public/
+          cp site/img/*.jpg public/img/
           cp scripts/install.sh public/
           cp scripts/bootstrap.sh public/
 
